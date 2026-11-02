@@ -38,7 +38,7 @@ test('dynamic team chooses only required agents and returns a combined output',a
  assert.match(result.at(-1).text,/backend:/);
  assert.ok(events.some(e=>e.type==='branch'&&e.targets.includes('backend')));
  assert.equal(graph.edges.length,0);
- await assert.rejects(runGraph({workflow:{graph},codex:new Fake(['frontend','backend']),prompt:'Build API',cwd:'/tmp',emit:()=>{}}),/ugyldig/);
+ await assert.rejects(runGraph({workflow:{graph},codex:new Fake(['frontend','backend']),prompt:'Build API',cwd:'/tmp',emit:()=>{}}),/uden tilladt forbindelse|ugyldig/);
 });
 test('dynamic mode rejects unsupported nodes, limits and ambiguous orchestrators',()=>{
  const graph={executionMode:'dynamic',maxActiveAgents:4,nodes:[start,agent('a'),end],edges:[]};
