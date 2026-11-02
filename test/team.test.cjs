@@ -61,3 +61,17 @@ test('extra work is bounded and a completed request is not queued twice',async t
  for(let i=0;i<8;i++){assert.equal((await rpc(channel,'team_request',{task:'Button '+i})).status,200);team.finishTasks(team.takeTasks('front'));}
  assert.equal((await rpc(channel,'team_request',{task:'Button 9'})).status,400);assert.equal(routed,8);
 });
+
+test('connectionless team can wake a previously idle specialist on demand',async()=>{
+ class DynamicCodex extends TeamCodex{
+  async work(p){if(p.outputSchema?.properties.targets){this.finish(p,JSON.stringify({targets:['back'],reason:'Backend is initially sufficient'}));return;}return super.work(p);}
+ }
+ const dynamic={executionMode:'dynamic',maxActiveAgents:2,nodes:nodes.filter(n=>['s','front','back','end'].includes(n.id)),edges:[]};
+ const codex=new DynamicCodex(),events=[];
+ const results=await runGraph({workflow:{graph:dynamic},codex,cwd:'/tmp',prompt:'Build page',emit:e=>events.push(e)});
+ assert.ok(results.some(r=>r.nodeId==='front'));
+ assert.ok(results.some(r=>r.nodeId==='back'));
+ assert.match(results.at(-1).text,/front v1/);
+ assert.ok(events.some(e=>e.type==='team'&&e.kind==='task-request'));
+ assert.ok(events.some(e=>e.type==='node-started'&&e.nodeId==='front'));
+});
