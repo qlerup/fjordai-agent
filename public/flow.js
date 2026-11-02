@@ -104,8 +104,18 @@
     }else if(n.type==='review')box.append(node('p','Reviewer læser og kontrollerer. Den retter ikke selv filer. Rettelsesagenterne beholder deres eksisterende læse- eller skriveadgang.','muted'));else if(n.type==='analysis')box.append(node('p','Forstår input og vælger de relevante udgange. Udfører ikke opgaver og genererer ikke billeder.','muted'));else box.append(node('p','V\u00e6lger kun mellem de noder, der er forbundet til udgangen.','muted'));
    }
    if(n.type==='review'){
+    this.field(box,'Automatisk reviewer-eskalering',n.escalation?.enabled?'on':'off',v=>{n.escalation={enabled:v==='on',model:n.escalation?.model||'',reasoningEffort:n.escalation?.reasoningEffort||''};this.inspect();},{options:[['off','Fra · kun standardreview'],['on','Til · højst én ekstra gennemgang pr. opgave']]});
+    if(n.escalation?.enabled){
+     const choices=[['','Vælg eskaleringsmodel'],...this.models.map(m=>[m.model||m.id,m.displayName||m.model||m.id])];
+     if(n.escalation.model&&!choices.some(([id])=>id===n.escalation.model))choices.push([n.escalation.model,n.escalation.model+' · gemt model']);
+     this.field(box,'Eskaleringsmodel',n.escalation.model,v=>{n.escalation.model=v;if(!this.reasoningOptions(v).efforts.includes(n.escalation.reasoningEffort))n.escalation.reasoningEffort='';this.inspect();},{options:choices});
+     const info=this.reasoningOptions(n.escalation.model),efforts=[['','Automatisk'],...info.efforts.map(v=>[v,v])];
+     if(n.escalation.reasoningEffort&&!efforts.some(([id])=>id===n.escalation.reasoningEffort))efforts.push([n.escalation.reasoningEffort,n.escalation.reasoningEffort+' · gemt niveau']);
+     this.field(box,'Eskalerings-reasoning',n.escalation.reasoningEffort,v=>n.escalation.reasoningEffort=v,{options:efforts});
+     box.append(node('p','Standardreview vurderer konkret evidens: væsentlige fejl efter rettelser, kompleks arkitektur, kritisk sikkerhed, datatab eller vigtig teknisk usikkerhed. Højst én ekstra modelgennemgang pr. opgave. Brugerens nøgleord alene udløser den aldrig.','muted'));
+    }
     box.append(node('p','RETTELSER MED DRONE','eyebrow'));this.field(box,'Maks. rettelsesrunder',String(n.maxRounds??3),v=>n.maxRounds=Number(v),{options:[1,2,3,4,5].map(i=>[String(i),i+' rettelsesrunde'+(i===1?'':'r')])});
-    const seen=new Set();const visit=id=>{for(const e of this.graph.edges.filter(e=>e.target===id))if(!seen.has(e.source)){seen.add(e.source);visit(e.source);}};visit(n.id);const candidates=this.graph.nodes.filter(a=>a.type==='agent'&&seen.has(a.id));
+    const seen=new Set();const visit=id=>{for(const e of this.graph.edges.filter(e=>e.target===id))if(!seen.has(e.source)){seen.add(e.source);visit(e.source);}};visit(n.id);const candidates=this.graph.nodes.filter(a=>a.type==='agent'&&(this.graph.executionMode==='dynamic'||seen.has(a.id)));
     this.field(box,'Rettelsesmodtagere',n.reviewScope||'all',v=>{n.reviewScope=v;if(v==='selected'&&!n.reviewTargets?.length)n.reviewTargets=candidates.map(a=>a.id);this.inspect();},{options:[['all','Alle aktive agenter før Reviewer'],['selected','Kun de valgte agenter']]});
     for(const agent of candidates){const label=node('label',undefined,'review-target'),check=node('input');check.type='checkbox';check.checked=n.reviewScope!=='selected'||(n.reviewTargets||[]).includes(agent.id);check.disabled=n.reviewScope!=='selected';check.setAttribute('aria-label','Rettelser til '+agent.name);check.onchange=()=>{n.reviewTargets=check.checked?[...new Set([...(n.reviewTargets||[]),agent.id])]:(n.reviewTargets||[]).filter(id=>id!==agent.id);this.changed();};label.append(check,node('span',agent.name+(agent.access==='write'?' · kan redigere':' · læs kun')));box.append(label);}
     box.append(node('p',candidates.length?'Reviewer sender kun rettelser til de valgte grene, der faktisk blev kørt. Dronen leverer feedbacken, resultaterne samles igen, og Reviewer kontrollerer på ny.':'Forbind mindst én agent før review-blokken.','muted'));

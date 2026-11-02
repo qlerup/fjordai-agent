@@ -1,8 +1,9 @@
 const TYPES=['start','analysis','agent','review','router','condition','text','merge','end'];
-const {ancestors,reviewSchema,validateReview}=require('./review.cjs');
+const {ancestors}=require('./review.cjs');
 const {downstreamRouters,classificationSchema,validateClassification}=require('./classification.cjs');
 const {reasoningEffort}=require('./models.cjs');
 const {createTeam}=require('./team.cjs');
+const {reviewWithEscalation}=require('./review-escalation.cjs');
 const text=(v,max)=>typeof v==='string'&&v.trim().length>0&&v.length<=max;
 function legacyGraph(steps){const nodes=[{id:'start',type:'start',name:'Start',x:70,y:160},...steps.map((s,i)=>({id:'agent-'+i,type:'agent',x:330+i*260,y:160,...s})),{id:'end',type:'end',name:'Svar',x:330+steps.length*260,y:160}];return{nodes,edges:nodes.slice(0,-1).map((n,i)=>({source:n.id,target:nodes[i+1].id,port:'out'}))};}
 function topological(graph){const indegree=new Map(graph.nodes.map(n=>[n.id,0]));for(const e of graph.edges)indegree.set(e.target,indegree.get(e.target)+1);const queue=graph.nodes.filter(n=>!indegree.get(n.id)).map(n=>n.id),order=[];while(queue.length){const id=queue.shift();order.push(id);for(const e of graph.edges.filter(e=>e.source===id)){indegree.set(e.target,indegree.get(e.target)-1);if(!indegree.get(e.target))queue.push(e.target);}}if(order.length!==graph.nodes.length)throw new Error('Workflowet har en cirkel. Forbindelser skal gå fremad uden løkker.');return order;}
@@ -20,6 +21,8 @@ function validateGraph(input){
    const limit=n.maxRounds??3,scope=n.reviewScope||'all',targets=n.reviewTargets||[];
    if(!Number.isInteger(limit)||limit<1||limit>5||!['all','selected'].includes(scope)||!Array.isArray(targets)||targets.length>32||new Set(targets).size!==targets.length||targets.some(id=>typeof id!=='string')||scope==='selected'&&!targets.length)throw new Error('Code Reviewer kræver 1–5 rettelsesrunder og gyldige modtagere');
    Object.assign(item,{maxRounds:limit,reviewScope:scope,reviewTargets:targets});
+   if(n.escalation!==undefined){const e=n.escalation;if(!e||typeof e!=='object'||Array.isArray(e)||typeof e.enabled!=='boolean'||(e.enabled&&!text(e.model,100))||(!e.enabled&&typeof e.model!=='string'))throw new Error('Ugyldig reviewer-eskalering');item.escalation={enabled:e.enabled,model:e.model,reasoningEffort:reasoningEffort(e.reasoningEffort)};}
+
   }
   if(n.type==='router'){if(n.routingMode!==undefined&&!['ai','analysis'].includes(n.routingMode))throw new Error('Ugyldig beslutningskilde');if(n.routingMode==='analysis'&&!n.routes)throw new Error('En fordeler med Inputanalyse kræver navngivne udgange');item.routingMode=n.routingMode||'ai';if(n.maxAgents!==undefined){if(!Number.isInteger(n.maxAgents)||n.maxAgents<1||n.maxAgents>32)throw new Error('Ugyldig grænse for aktive agenter');item.maxAgents=n.maxAgents;}}
   if(['analysis','router'].includes(n.type)&&n.routes!==undefined){
@@ -77,6 +80,9 @@ async function runGraph({workflow,startNodeId,routeOnly=false,...options}){
 
  const controller=new AbortController();options.signal=AbortSignal.any([controller.signal,...(options.signal?[options.signal]:[])]);
  require('node:events').setMaxListeners(0,options.signal);
+ const reviewBudget={used:0},reviewFeedback=new Map(),runtimeEvidence=[];let evidenceId=0;
+ const originalEmit=options.emit,hasEscalation=workflow.graph.nodes.some(n=>n.type==='review'&&n.escalation?.enabled);
+ if(hasEscalation)options.emit=e=>{if(e.type==='diff'&&e.text||e.type==='command-result'){runtimeEvidence.push({id:'runtime-'+(++evidenceId),kind:e.type==='diff'?'change':'command',nodeId:e.nodeId,text:e.type==='diff'?e.text.slice(0,12000):JSON.stringify({command:e.command,exitCode:e.exitCode,output:e.output}).slice(0,12000)});if(runtimeEvidence.length>24)runtimeEvidence.shift();}originalEmit(e);};
  const graph=validateGraph(workflow.graph),byId=new Map(graph.nodes.map(n=>[n.id,n]));const start=startNodeId?byId.get(startNodeId):graph.nodes.find(n=>n.type==='start');if(!start||start.type!=='start')throw new Error('Projektets startnode findes ikke i dette workflow');
  const {runWorkflow}=require('./codex.cjs');const enabled=new Set([start.id]),parents=new Map(),outputs=new Map(),classifications=new Map(),answers=[];
  const team=createTeam({nodes:graph.nodes,prompt:options.prompt,emit:options.emit,signal:options.signal,compact:workflow.graph?.dynamicTeam===true,maxActiveAgents:graph.nodes.find(n=>n.type==='router')?.maxAgents||16,route:async request=>{
@@ -91,12 +97,13 @@ async function runGraph({workflow,startNodeId,routeOnly=false,...options}){
  const upstream=id=>{const result=[],seen=new Set();function visit(key){for(const p of parents.get(key)||[]){if(seen.has(p))continue;seen.add(p);visit(p);if(outputs.has(p))result.push(byId.get(p).name+':\n'+outputs.get(p));}}visit(id);return result.join('\n\n').slice(-60000);};
  const rawFor=id=>{const parts=[],seen=new Set();function visit(key){for(const parent of parents.get(key)||[]){if(seen.has(parent))continue;seen.add(parent);if(outputs.has(parent))parts.push(outputs.get(parent));else visit(parent);}}visit(id);return parts.join('\n\n').slice(-60000);};
  const activeAncestors=id=>{const found=new Set();function visit(key){for(const parent of parents.get(key)||[])if(!found.has(parent)){found.add(parent);visit(parent);}}visit(id);return found;};
- const agentTurns=new Map();
+ const agentTurns=new Map(),activatedSpecialists=new Set();
  const executeAgent=(node,feedback)=>{
   const turn=(agentTurns.get(node.id)||Promise.resolve()).then(()=>executeAgentTurn(node,feedback));agentTurns.set(node.id,turn);return turn;
  };
  const executeAgentTurn=async(node,feedback)=>{
   options.signal.throwIfAborted();
+  if(workflow.graph?.dynamicTeam&&!activatedSpecialists.has(node.id)){const limit=graph.nodes.find(n=>n.type==='router')?.maxAgents||4;if(activatedSpecialists.size>=limit)throw new Error('Teamet har nået grænsen for aktive specialister');activatedSpecialists.add(node.id);}
   const channel=await team.connect(node.id),teamTasks=team.takeTasks(node.id);let result;
   try{result=await runWorkflow({...options,...(channel?{config:{...options.config,mcp_servers:{...options.config?.mcp_servers,...channel.config}}}:{}),emit:e=>options.emit({...e,nodeId:node.id}),history:((options.history||'')+'\n'+upstream(node.id)+(outputs.has(node.id)?'\nTidligere svar fra dig:\n'+outputs.get(node.id):'')+(channel?'\nFælles teamkontekst:\n'+channel.context:'')).slice(workflow.graph?.dynamicTeam?-24000:-60000),prompt:options.prompt+(teamTasks.length?'\nOpgaver fra dine holdkammerater, som du skal udføre nu med din eksisterende rolle og filadgang:\n'+JSON.stringify(teamTasks):'')+(feedback?'\n\nRettelsesopgave fra Code Reviewer (bevar din eksisterende rolle og filadgang):\n'+JSON.stringify({...feedback,previousResult:outputs.get(node.id)||''}):''),steps:[channel?{...node,instructions:node.instructions+'\nDu er del af et team om SAMME forespørgsel. team_context viser roller, opgaver og færdige resultater. Udfør kun din egen rolle. Hvis din løsning kræver arbejde fra en anden agent, skal du med team_request sende en konkret opgave tilbage til den fordeler, teamet kom fra. Beskriv hvad der skal bygges, funktion, relevante API/datafelter, placering og acceptkriterier. Du må ikke vælge eller instruere modtageren direkte; fordeleren vælger den rette aktive agent. Et pending-svar betyder kun at opgaven er sat i kø, ikke at den er udført. Den udføres før samling/review, også hvis modtageren allerede var færdig. Gentag ikke en allerede registreret opgave. Brug team_context til at se status; vent ikke i en løkke på andre agenter. Hold dig til din egen filadgang og rolle.'}:node]});}
   catch(e){team.finishTasks(teamTasks,true);throw e;}finally{channel?.close();}
@@ -124,8 +131,14 @@ async function runGraph({workflow,startNodeId,routeOnly=false,...options}){
    if(!targets.length)throw new Error('Code Reviewer har ingen aktive rettelsesmodtagere før review-blokken');
    for(let round=0;;round++){
     options.signal?.throwIfAborted();
-    const result=await runWorkflow({...options,emit,onImage:undefined,structuredOutput:true,history:((options.history||'')+'\n'+upstream(id)+'\nTeamets ekstra opgaver og status:\n'+team.reviewContext(targets.map(n=>n.id))).slice(-60000),steps:[{...node,taskMode:'review',instructions:node.instructions+'\nKontrollér det faktiske resultat og projektfilerne. Ændr aldrig selv filer. Godkend kun når kravene er opfyldt. Ellers skal corrections angive modtager-id og konkrete rettelser for hver relevant agent fra listen. Vælg aldrig andre modtagere. Returnér kun JSON med approved, summary og corrections.'}],prompt:JSON.stringify({task:options.prompt,extraMessages:options.runInput?.snapshot().text||'',attempt:round+1,remainingCorrectionRounds:node.maxRounds-round,candidates:targets.map(n=>({id:n.id,name:n.name,access:n.access,result:outputs.get(n.id)}))}),outputSchema:reviewSchema(targets)});
-    const verdict=validateReview(result[0].text,targets);emit({type:'step',name:node.name});emit({type:'delta',text:verdict.summary});emit({type:'review',name:node.name,approved:verdict.approved,round,maxRounds:node.maxRounds,summary:verdict.summary,corrections:verdict.corrections});
+    let feedback=reviewFeedback.get(id);if(!feedback){feedback=[];reviewFeedback.set(id,feedback);}
+    const extraEvidence=node.escalation?.enabled&&options.getReviewEvidence?await options.getReviewEvidence():[];
+    const evidence=[...extraEvidence,...runtimeEvidence.filter(e=>!e.nodeId||before.has(e.nodeId)||e.nodeId===id)];
+    const verdict=await reviewWithEscalation({node,targets,round,evidence,feedback,budget:reviewBudget,emit,run:async(reviewNode,schema,assessment)=>{
+     const {instructions,...reviewAssessment}=assessment;
+     const result=await runWorkflow({...options,emit,onImage:undefined,structuredOutput:true,history:((options.history||'')+'\n'+upstream(id)+'\nTeamets ekstra opgaver og status:\n'+team.reviewContext(targets.map(n=>n.id))).slice(node.escalation?.enabled?-24000:-60000),steps:[{...reviewNode,taskMode:'review',instructions:reviewNode.instructions+'\nKontrollér det faktiske resultat og projektfilerne. Ændr aldrig selv filer. Godkend kun når kravene er opfyldt. Ellers skal corrections angive modtager-id og konkrete rettelser for hver relevant agent fra listen. Vælg aldrig andre modtagere. Returnér kun JSON efter skemaet.\n'+assessment.instructions}],prompt:JSON.stringify({task:options.prompt,extraMessages:options.runInput?.snapshot().text||'',attempt:round+1,remainingCorrectionRounds:node.maxRounds-round,candidates:targets.map(n=>({id:n.id,name:n.name,access:n.access,result:node.escalation?.enabled?outputs.get(n.id).slice(-6000):outputs.get(n.id)})),...(node.escalation?.enabled?{reviewAssessment}:{})}),outputSchema:schema});return result[0].text;
+    }});
+    emit({type:'step',name:node.name});emit({type:'delta',text:verdict.summary});emit({type:'review',name:node.name,approved:verdict.approved,round,maxRounds:node.maxRounds,summary:verdict.summary,corrections:verdict.corrections});
     if(verdict.approved){outputs.set(id,verdict.summary);answerFor(node,{name:node.name,text:verdict.summary});break;}
     if(round>=node.maxRounds)throw new Error(node.name+' har ikke godkendt resultatet efter '+node.maxRounds+' rettelsesrunder. '+verdict.summary);
     const flights=verdict.corrections.map(c=>({port:'revision',target:c.nodeId,transport:'drone'}));emit({type:'node-completed',name:node.name,result:verdict.summary,targets:flights.map(e=>e.target),edges:flights});

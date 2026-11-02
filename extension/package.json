@@ -2,7 +2,7 @@
   "name": "fjordagent",
   "displayName": "FjordAI Agent",
   "description": "Chat with your self-hosted agent workflows from VS Code",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "publisher": "fjordcode",
   "license": "MIT",
   "engines": {

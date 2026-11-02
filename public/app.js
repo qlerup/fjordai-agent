@@ -20,6 +20,7 @@ function showResult(answer,details=[]){if(answer?.text)message('FjordAgent',answ
 const contextHint=el('p','','muted');contextHint.id='context-info';contextHint.hidden=true;$('activity').after(contextHint);
 function showEvent(e){
  if(e.type==='node-started')$('activity').textContent=e.name+' arbejder…';
+ if(e.type==='review-escalated'){$('activity').textContent='Ekstra Code Review · '+e.model;detail('Review eskaleret: '+e.reason);}
  if(e.type==='review')$('activity').textContent=e.approved?'Resultatet er kontrolleret':'Agenten retter resultatet efter review';
  if(e.type==='compaction'){contextHint.hidden=e.state!=='started';contextHint.textContent='Komprimerer konteksten…';}
  if(e.type==='image')showImage(e.name,e.image);

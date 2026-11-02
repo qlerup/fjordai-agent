@@ -136,3 +136,11 @@ Each project now has a **Manuelt / Dynamisk team** execution selector in the wor
 ## Agent collaboration
 
 The team conversation contains messages and tasks sent between agents. Automatic status reports and partial results stay outside this conversation. Agents can send coordination messages using `team_message`; implementation requests use `team_request` and the distributor selects the recipient. Extra user messages traverse input analysis and routing and appear as packages in the factory.
+
+## Optional reviewer escalation
+
+A Code Reviewer can opt into automatic escalation using the inspector's **Automatisk reviewer-eskalering**, **Eskaleringsmodel** and **Eskalerings-reasoning** fields. Settings are stored on that reviewer node and work in both manual and dynamic workflows. Default is off. Choose available models and supported reasoning levels from your installation's model catalog.
+
+Normal review still uses the node's standard model and correction-round limit. When enabled, that model must classify the severity and cite runtime evidence IDs: actual file diffs, executed command results or earlier review feedback. Escalation can occur for major unresolved findings after a correction, complex architecture, critical security, data-loss/regression risks or important technical uncertainty. Prompt keywords and specialist claims alone do not qualify. At most one extra escalated review is allowed across the entire run, including reviewer reruns. It receives the evidence and prior feedback, keeps read access and does not restart implementation. Rejected or malformed reviews still block completion; a failed escalated call also fails the run.
+
+For VS Code tasks, file changes come from the conflict-check baseline and command evidence includes observed server/local command results. In other tasks, runtime diff/command events provide evidence. Evidence and repeated context are bounded; this is not a substitute for actually running relevant tests.

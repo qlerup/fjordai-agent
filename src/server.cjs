@@ -197,7 +197,7 @@ function createApp({ dataDir = process.env.DATA_DIR || path.resolve('data'), cod
           }});
           conversationHistory=history;
           const onImage=(item,step)=>{const image=saveImage(item,{root:path.join(home,'generated_images'),directory:path.join(dataDir,'images',run.id),runId:run.id,name:step.name});run.images.push(image);store.save();return image;};
-          if(workflow.graph)return runGraph({workflow:structuredClone(workflow),startNodeId,codex,prompt:b.prompt,attachments,history,cwd,emit,signal:controller.signal,approve,config,projectBridge:!!bridgeToken,onImage,fullAccess:run.fullAccess,runInput});
+          if(workflow.graph)return runGraph({workflow:structuredClone(workflow),startNodeId,codex,prompt:b.prompt,attachments,history,cwd,emit,signal:controller.signal,approve,config,projectBridge:!!bridgeToken,onImage,fullAccess:run.fullAccess,runInput,getReviewEvidence:snapshot?()=>{const report=changeReport(collectChanges(cwd,snapshot),snapshot);if(report.error)throw new Error(report.error);return report.files.slice(0,24).map(f=>({id:'file-'+hash(f.path).slice(0,16),kind:'change',text:f.path+'\n'+f.diff}));}:undefined});
         })()
           .then(answers=>{run.answers=answers;if(snapshot){run.changes=collectChanges(cwd,snapshot);run.changeReport=changeReport(run.changes,snapshot);}run.status='completed';emit({type:'result',answer:answers.at(-1),details:answers.slice(0,-1)});})
           .catch(e=>{run.status=controller.signal.aborted&&!['PROJECT_CONNECTION_ERROR','INPUT_ROUTING_ERROR'].includes(controller.signal.reason?.code)?'interrupted':'failed';run.error=e.message;emit({type:'error',text:e.message});})

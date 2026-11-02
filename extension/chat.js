@@ -33,6 +33,7 @@ window.addEventListener('message',({data:m})=>{
   if(m.type==='state'){options('project',m.projects);if(m.activeProjectId)$('project').value=m.activeProjectId;$('workspace').textContent='Arbejdsmappe: '+m.workspace;if(!isBusy)vscode.postMessage({type:'history',projectId:$('project').value});}
   if(m.type==='compaction'){contextHint.hidden=m.state!=='started';contextHint.textContent=m.state==='started'?'Komprimerer '+(m.scope==='project'?'samtalehistorik':'agentens kontekst')+'…':'Kontekst komprimeret · fortsætter';}
   if(m.type==='usage'&&m.usage?.modelContextWindow>0)contextHint.textContent='Kontekst ca. '+Math.min(100,Math.round(100*(m.usage.last?.totalTokens||0)/m.usage.modelContextWindow))+' % · automatisk komprimering';
+  if(m.type==='review-escalated'){$('status').textContent='Ekstra Code Review · '+m.model;detail('Review eskaleret: '+m.reason);}
   if(m.type==='review')$('status').textContent=m.approved?'Code Reviewer har godkendt resultatet':m.round>=m.maxRounds?'Grænsen for rettelsesrunder er nået':'Rettelser med drone · runde '+(m.round+1)+'/'+m.maxRounds;
   if(m.type==='branch')detail(m.name+': '+m.text);
   if(m.type==='history-start'){$('messages').replaceChildren();current=null;}

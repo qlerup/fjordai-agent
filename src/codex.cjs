@@ -113,6 +113,10 @@ async function runWorkflow({ codex, steps, prompt, cwd, history = '', emit, sign
         if (msg.method === 'item/completed' && p.item?.type === 'agentMessage' && (!p.item.phase||p.item.phase==='final_answer')) finalText = p.item.text || finalText;
         if (msg.method === 'item/completed' && p.item?.type === 'agentMessage' && !text) { text = p.item.text || ''; if(!structuredOutput)emit({ type: 'delta', text }); }
         if (msg.method === 'item/started' && ['commandExecution','fileChange'].includes(p.item?.type)) emit({ type: 'activity', text: p.item.command || 'Ændrer filer' });
+        if(msg.method==='item/completed'&&p.item?.type==='commandExecution')emit({type:'command-result',command:String(p.item.command||'').slice(0,2000),exitCode:p.item.exitCode,output:String(p.item.aggregatedOutput||'').slice(-8000)});
+        if(msg.method==='item/completed'&&p.item?.type==='mcpToolCall'&&p.item.tool==='project_run_command'){
+          for(const content of p.item.result?.content||[])if(content.type==='text'){let result;try{result=JSON.parse(content.text);}catch{continue;}if(result?.host==='vscode'&&typeof result.output==='string')emit({type:'command-result',command:String(p.item.arguments?.command||'local command').slice(0,2000),exitCode:result.exitCode,output:result.output.slice(-8000)});}
+        }
         if(msg.method==='item/started'&&p.item?.type==='imageGeneration')emit({type:'activity',text:step.name+' genererer et billede…'});
         if(['item/started','item/completed'].includes(msg.method)&&p.item?.type==='contextCompaction')emit({type:'compaction',state:msg.method==='item/started'?'started':'completed',scope:'agent',name:step.name});
         if(msg.method==='item/completed'&&p.item?.type==='imageGeneration'){
