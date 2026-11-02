@@ -6,6 +6,7 @@ function createTeam({nodes,prompt,emit,signal,route,compact=false,maxActiveAgent
  const byId=new Map(nodes.map(n=>[n.id,n])),groups=[],caps=new Map(),tasks=[];let server,starting,closed=false;
  function register(source,edges){
   const active=[...new Set(edges.map(e=>e.target))].filter(id=>byId.get(id)?.type==='agent');
+  if(compact&&(byId.get(source)?.type!=='router'||!active.length))return;
   const members=compact?nodes.filter(n=>n.type==='agent').map(n=>n.id):active;
   if(members.length<2)return;
   const id=source+':'+groups.length;
