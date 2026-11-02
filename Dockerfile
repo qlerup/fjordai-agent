@@ -7,6 +7,7 @@ COPY src ./src
 COPY deploy ./deploy
 COPY public/factory-scene.js ./public/factory-scene.js
 COPY public/factory-playback.mjs ./public/factory-playback.mjs
+COPY public/agent-network.mjs public/agent-network-scene.mjs ./public/
 COPY public/change-view.js public/change-view.css ./public/
 RUN node deploy/build-factory.cjs && node deploy/package-extension.cjs
 
