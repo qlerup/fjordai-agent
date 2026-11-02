@@ -53,3 +53,32 @@ test('extra input replays its selected analysis route as packages even after the
  assert.equal(p.transfers[0].target,'b');assert.equal(p.transfers[0].port,'backend');
  p.update({runId:'extra',events,status:'running'});assert.equal(p.queue.length,0);
 });
+
+test('dynamic network replays actual colleague messages and delegated tasks',async()=>{
+ const {FactoryPlayback}=await load(),p=new FactoryPlayback();p.networkMode=true;
+ p.update({runId:'network',status:'running',events:[
+  {type:'node-started',nodeId:'backend'},
+  {type:'team',kind:'message',from:'backend',to:'frontend',text:'Use /api/items'},
+  {type:'team',kind:'task-request',from:'backend',to:'__fjord_team_router'},
+  {type:'team',kind:'task',from:'__fjord_team_router',to:'frontend'},
+  {type:'node-started',nodeId:'frontend'}
+ ]});
+ p.advance(0);assert.equal(p.nodes.backend,'running');
+ p.advance(200);assert.deepEqual(p.transfers.map(t=>[t.source,t.target,t.transport]),[['backend','frontend','signal']]);
+ p.advance(760);assert.equal(p.transfers[0].target,'__fjord_team_router');
+ p.advance(1050);assert.equal(p.transfers[0].target,'frontend');
+ p.advance(1050);assert.equal(p.nodes.frontend,'running');
+});
+
+test('review escalation is displayed without inventing an extra agent transfer',async()=>{
+ const {FactoryPlayback}=await load(),p=new FactoryPlayback();p.networkMode=true;
+ p.update({runId:'review-upgrade',status:'running',events:[
+  {type:'node-started',nodeId:'review'},
+  {type:'review-escalated',nodeId:'review',model:'astra',reason:'verified failing test'},
+  {type:'review',nodeId:'review',approved:true}
+ ]});
+ p.advance(0);assert.equal(p.active,'review');
+ p.advance(200);assert.equal(p.escalations.review,undefined,'approval clears escalation');
+ assert.deepEqual(p.transfers,[]);
+ assert.equal(p.reviews.review,'approved');
+});
