@@ -79,7 +79,7 @@ async function runGraph({workflow,startNodeId,routeOnly=false,...options}){
  require('node:events').setMaxListeners(0,options.signal);
  const graph=validateGraph(workflow.graph),byId=new Map(graph.nodes.map(n=>[n.id,n]));const start=startNodeId?byId.get(startNodeId):graph.nodes.find(n=>n.type==='start');if(!start||start.type!=='start')throw new Error('Projektets startnode findes ikke i dette workflow');
  const {runWorkflow}=require('./codex.cjs');const enabled=new Set([start.id]),parents=new Map(),outputs=new Map(),classifications=new Map(),answers=[];
- const team=createTeam({nodes:graph.nodes,prompt:options.prompt,emit:options.emit,signal:options.signal,compact:workflow.graph?.dynamicTeam===true,route:async request=>{
+ const team=createTeam({nodes:graph.nodes,prompt:options.prompt,emit:options.emit,signal:options.signal,compact:workflow.graph?.dynamicTeam===true,maxActiveAgents:graph.nodes.find(n=>n.type==='router')?.maxAgents||16,route:async request=>{
   const source=byId.get(request.source),before=activeAncestors(source.id),analyst=[...graph.nodes].reverse().find(n=>n.type==='analysis'&&before.has(n.id));
   const decider=source.type==='analysis'?source:source.type==='router'&&source.routingMode!=='analysis'?source:analyst||byId.get(request.members[0]);
   const candidates=request.members.filter(id=>id!==request.from).map(id=>byId.get(id));
@@ -183,6 +183,15 @@ async function runGraph({workflow,startNodeId,routeOnly=false,...options}){
      for(const id of descendants){settled.delete(id);generations.set(id,(generations.get(id)||0)+1);}
     }
    }
+   // In a dynamic team a specialist can call an initially idle teammate.
+   // Register the newly activated worker as a real dependency before merges/review.
+   if(workflow.graph?.dynamicTeam)for(const id of team.pendingTargets())if(!enabled.has(id)){
+    enabled.add(id);settled.delete(id);
+    const distributor=graph.nodes.find(n=>n.type==='router');
+    if(distributor){if(!parents.has(id))parents.set(id,new Set());parents.get(id).add(distributor.id);}
+    const descendants=new Set();function invalidate(key){for(const edge of graph.edges.filter(e=>e.source===key))if(!descendants.has(edge.target)){descendants.add(edge.target);invalidate(edge.target);}}invalidate(id);
+    for(const downstream of descendants){settled.delete(downstream);generations.set(downstream,(generations.get(downstream)||0)+1);}
+   }
    // Extra assignments received while an agent was working run again with its
    // existing role. Never run two turns for the same agent simultaneously.
    for(const id of team.pendingTargets())if(settled.has(id)&&!running.has(id))launch(id,async()=>{
@@ -196,7 +205,7 @@ async function runGraph({workflow,startNodeId,routeOnly=false,...options}){
     const before=activeAncestors(id);
     // Wait for queued revisions to the inputs being collected. Team membership
     // alone must never introduce a dependency on an unconnected branch.
-    if(['merge','review','end'].includes(byId.get(id).type)&&(options.runInput?.routing||[...before].some(p=>running.has(p)||team.pendingTargets().includes(p)||options.runInput?.pendingTargets().includes(p))))continue;
+    if(['merge','review','end'].includes(byId.get(id).type)&&(options.runInput?.routing||[...before].some(p=>running.has(p)||team.pendingTargets().includes(p)||options.runInput?.pendingTargets().includes(p))||workflow.graph?.dynamicTeam&&team.hasOutstandingTasks()))continue;
     const generation=generations.get(id)||0;launch(id,async()=>{await executeNode(id);if(generation===(generations.get(id)||0))settled.add(id);});
    }
    if(running.size||options.runInput?.routing){const change=options.runInput?.watch();try{await Promise.race([...running.values(),...(change?[change.promise]:[])]);}finally{change?.close();}}
