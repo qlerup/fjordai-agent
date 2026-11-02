@@ -133,6 +133,16 @@ Each project now has a **Manuelt / Dynamisk team** execution selector in the wor
 - Dynamic runs shorten injected specialist descriptions and prior conversation context to reduce repetitive token use. This is a **cost optimization**, not a guaranteed token saving or quality improvement: compare similar runs using actual usage events and tests before drawing conclusions.
 - Like manual concurrent branches, selected write agents currently share a working directory. Give them non-overlapping file responsibilities; avoid enabling automatic full access for untrusted tasks. No unattended deployment is added by this feature.
 
+## Live 3D agent network
+
+Dynamic-team projects show a separate holographic **agent network** instead of the manual workflow warehouse. The central Orchestrator, specialists, optional reviewer and the result collector are visible as distinct stations. Virtual orchestration/collection stations represent the existing runtime nodes and are never stored in the editable graph.
+
+Real event-driven arcs show transfers after node completion, agent messages, distributor task requests, assignments and review corrections. Blue pulses indicate direct messages, amber packets indicate delegation, violet signals indicate corrections and green packets represent workflow handoffs. Faint resting spokes mean a specialist is *available*, not that an interaction has occurred.
+
+The live-activity overlay displays recent messages, task handoffs, specialist starts and optional reviewer model escalation. Click a real specialist to inspect it. The existing Teamsamtale panel still contains task details. Reduced-motion mode preserves status and activity text while disabling animated packets. Manual workflows keep their existing buildings and conveyors.
+
+The 3D view reflects events already recorded in a run; it does not create new AI calls or alter code execution. The normal Docker build regenerates `public/factory3d.js` from the source modules. For direct local development, run `npm run build:factory` before `npm start`.
+
 ## Agent collaboration
 
 The team conversation contains messages and tasks sent between agents. Automatic status reports and partial results stay outside this conversation. Agents can send coordination messages using `team_message`; implementation requests use `team_request` and the distributor selects the recipient. Extra user messages traverse input analysis and routing and appear as packages in the factory.
