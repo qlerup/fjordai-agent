@@ -7,17 +7,20 @@ function createRunInput({messages=[],emit=()=>{},save=()=>{},route,onError=()=>{
  const changed=()=>{for(const listener of changes)listener();};
  const snapshot=key=>{const selected=messages.filter(m=>m.status==='ready'&&(!key||m.targets.includes(key)));return{version:selected.at(-1)?.sequence||0,messages:selected,text:selected.map(m=>'Ekstra besked fra brugeren: '+m.text+(m.analysis?'\nInputanalysens vurdering: '+m.analysis:'')).join('\n\n')};};
  function assigned(message,targets){
+  if(targets&&typeof targets.answer==='string'&&targets.answer.trim()){
+   message.status='answered';message.answer=targets.answer;message.targets=[];emit({type:'orchestrator-reply',message});save();changed();return;
+  }
   if(!Array.isArray(targets)||!targets.length)throw new Error('Fordeleren fandt ingen agent til den ekstra besked');
   message.targets=[...new Set(targets)];message.status='ready';emit({type:'input-routed',messageId:message.id,targets:message.targets});save();
   for(const listener of listeners)if(message.targets.includes(listener.key))listener.handler(message);
   changed();
  }
- function append(text,clientId){
+ function append(text,clientId,includePreviousConversations=false){
   if(typeof text!=='string'||!text.trim()||text.length>20000)throw Object.assign(new Error('Skriv en besked på højst 20.000 tegn'),{status:400});
   if(clientId!==undefined&&(typeof clientId!=='string'||!/^[-\w]{1,80}$/.test(clientId)))throw Object.assign(new Error('Ugyldigt besked-id'),{status:400});
   const duplicate=clientId&&messages.find(m=>m.clientId===clientId);if(duplicate){if(duplicate.text!==text.trim())throw Object.assign(new Error('Besked-id er allerede brugt til en anden tekst'),{status:409});return duplicate;}
   if(messages.length>=32||messages.reduce((n,m)=>n+m.text.length,0)+text.length>64000)throw Object.assign(new Error('Denne opgave har nået grænsen for ekstra beskeder. Start en ny opgave, når den er færdig.'),{status:400});
-  const message={id:randomUUID(),...(clientId?{clientId}:{}),text:text.trim(),sequence:messages.length+1,at:new Date().toISOString(),status:'routing',targets:[],deliveredTo:[]};
+  const message={id:randomUUID(),...(includePreviousConversations?{includePreviousConversations:true}:{}),...(clientId?{clientId}:{}),text:text.trim(),sequence:messages.length+1,at:new Date().toISOString(),status:'routing',targets:[],deliveredTo:[]};
   messages.push(message);emit({type:'user-message',message});save();
   changed();
   if(route)routingQueue=routingQueue.then(async()=>assigned(message,await route(message))).catch(e=>{message.status='failed';message.error=e.message;emit({type:'input-routing-failed',messageId:message.id,text:e.message});save();changed();onError(e);});

@@ -11,3 +11,14 @@ test('failed compaction keeps existing memory and does not silently discard the 
  const project={id:'p',memory:{summary:'Original memory'}},old=JSON.stringify(project);
  await assert.rejects(projectContext({project,runs:[run('01','x'.repeat(50000))],save:()=>assert.fail(),emit:()=>{},summarize:async()=>{throw Error('Offline');}}),/Offline/);assert.equal(JSON.stringify(project),old);
 });
+
+
+test('a fresh conversation does not inject archived messages or answers',async()=>{
+ const project={id:'p',conversationId:'new'},runs=[run('old','OLD ANSWER'),{...run('current','CURRENT ANSWER'),conversationId:'new'}];
+ const result=await projectContext({project,runs,save:()=>{},emit:()=>{},summarize:()=>assert.fail()});assert.match(result,/CURRENT ANSWER/);assert.doesNotMatch(result,/OLD ANSWER/);
+});
+
+test('explicit archive context includes only the same project and archived conversations',()=>{
+ const {archivedContext}=require('../src/context.cjs'),project={id:'p',conversationId:'new'};
+ const result=archivedContext(project,[run('old','EXPLICIT OLD'),{...run('same','CURRENT'),conversationId:'new'},{...run('foreign','OTHER PROJECT'),projectId:'other'}]);assert.match(result,/EXPLICIT OLD/);assert.doesNotMatch(result,/CURRENT|OTHER PROJECT/);
+});

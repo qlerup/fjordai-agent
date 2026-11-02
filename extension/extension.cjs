@@ -1,7 +1,8 @@
 const vscode=require('vscode');
 const {runLocalCommand}=require('./local-command.cjs');
 const {randomBytes}=require('node:crypto');
-const {safePath,hash,MAX_BYTES,MAX_FILES}=require('./runtime/workspace.cjs');
+const {safePath,hash,MAX_BYTES,MAX_FILE_BYTES,MAX_FILES}=require('./runtime/workspace.cjs');
+let remoteFileLimit=MAX_FILE_BYTES;
 let panel,activeRun,activeProjectId,activeFolder,baseline,changes,changesRunId,pollTimer,starting=false,activeProjects=[],historyGeneration=0;let localController,activeFullAccess=false;const bridgeInFlight=new Set();
 function activate(context){
   function workingFolder(){const roots=vscode.workspace.workspaceFolders||[];const file=vscode.window.activeTextEditor?.document.uri.toString();return file?roots.filter(f=>file.startsWith(f.uri.toString().replace(/\/$/,'')+'/')).sort((a,b)=>b.uri.toString().length-a.uri.toString().length)[0]||roots[0]:roots[0];}
@@ -17,7 +18,7 @@ function activate(context){
   async function refreshState(){
     const url=vscode.workspace.getConfiguration('fjordagent').get('serverUrl');const token=await context.secrets.get('serverToken');
     if(!url||!token){send({type:'connection',connected:false});return;}
-    const s=await api('state');send({type:'connection',connected:true,url});
+    const s=await api('state');remoteFileLimit=s.limits?.fileBytes||MAX_FILE_BYTES;send({type:'connection',connected:true,url});
     if(activeRun||starting)send({type:'busy',runId:activeRun});
     send({type:'state',projects:s.projects,activeProjectId:activeRun?activeProjectId:undefined,workspace:workingFolder()?.uri.fsPath||'Åbn en projektmappe først'});
   }
@@ -74,7 +75,7 @@ function activate(context){
         if(matches.length!==1)throw new Error('Projektet findes ikke entydigt. Brug project_list_projects.');const folder=matches[0];
         if(request.name==='project_read_file'){
           if(!safePath(args.path))throw new Error('Filstien er ikke tilladt');await noSymlink(folder.uri,args.path);
-          const uri=vscode.Uri.joinPath(folder.uri,args.path),stat=await vscode.workspace.fs.stat(uri);if(stat.size>524288)throw new Error('Filen er større end 512 KB');
+          const uri=vscode.Uri.joinPath(folder.uri,args.path),stat=await vscode.workspace.fs.stat(uri);if(stat.size>remoteFileLimit)throw new Error('Filen overskrider serverens filgrænse på '+remoteFileLimit/1024/1024+' MB');
           const content=await textAt(uri),referenceOnly=folder.uri.toString()!==activeFolder.uri.toString();
           if(!referenceOnly&&!baseline.has(args.path))baseline.set(args.path,content);
           result={path:args.path,project:folder.name,content,referenceOnly};
@@ -158,11 +159,12 @@ function activate(context){
       if(m.type==='connect'){await connect();return;}
       if(m.type==='ready'||m.type==='refresh'){await refreshState();return;}
       if(m.type==='history'&&!activeRun&&!starting){
-        const generation=++historyGeneration,state=await api('state'),runs=state.runs.filter(r=>r.projectId===m.projectId&&r.status!=='running').slice(-4);if(generation!==historyGeneration||activeRun||starting)return;send({type:'history-start'});
+        const generation=++historyGeneration,state=await api('state'),runs=state.runs.filter(r=>r.projectId===m.projectId&&r.conversationId===state.projects.find(p=>p.id===m.projectId)?.conversationId&&r.status!=='running').slice(-4);if(generation!==historyGeneration||activeRun||starting)return;send({type:'history-start'});
         for(const summary of runs){const run=await api('runs/'+summary.id);if(generation!==historyGeneration||activeRun||starting)return;send({type:'history-text',name:'Dig',text:run.prompt});if(run.id===runs.at(-1)?.id)for(const event of run.events||[])if(event.type==='team')send(event);for(const message of run.messages||[])send({type:'user-message',message});send({type:'history-result',answer:run.answers?.at(-1),details:run.answers?.slice(0,-1)||[]});for(const image of run.images||[]){const {bytes,mime}=await loadImage(run.id,image.id);if(generation!==historyGeneration||activeRun||starting)return;send({type:'image',runId:run.id,name:image.name,image:{...image,data:'data:'+mime+';base64,'+bytes.toString('base64')}});}if(run.error)send({type:'history-text',name:'Status',text:run.error});if(run.status==='completed'&&run.source==='vscode'){const application=run.application?.status||(await savedChangesMatch(run.changes)?'verified':'unknown');if(generation!==historyGeneration||activeRun||starting)return;send({type:'change-report',runId:run.id,report:run.changeReport,changes:(run.changes||[]).map(c=>({path:c.path,kind:c.kind})),application});}}return;
       }
+      if(m.type==='new-conversation'){if(activeRun||starting)throw new Error('Afslut eller stop opgaven først');historyGeneration++;await api('projects/'+m.projectId+'/conversation','POST',{});changes=null;changesRunId=undefined;send({type:'conversation-started'});return;}
       if(m.type==='app'){const {url}=await connection();await vscode.env.openExternal(vscode.Uri.parse(url));return;}
-      if(m.type==='followup'){if(!activeRun)throw new Error('Opgaven er afsluttet. Send beskeden som en ny opgave.');const reply=await api('runs/'+activeRun+'/messages','POST',{text:m.text,clientId:m.clientId});send({type:'followup-sent',message:reply.message});return;}
+      if(m.type==='followup'){if(!activeRun)throw new Error('Opgaven er afsluttet. Send beskeden som en ny opgave.');const reply=await api('runs/'+activeRun+'/messages','POST',{text:m.text,clientId:m.clientId,includePreviousConversations:m.includePreviousConversations===true});send({type:'followup-sent',message:reply.message});return;}
       if(m.type==='stop'){localController?.abort();if(activeRun)await api('runs/'+activeRun+'/stop','POST');return;}
       if(m.type==='apply'){await applyChanges();return;}
       if(m.type==='save-image'){const image=await loadImage(m.runId,m.imageId),ext={'image/png':'png','image/jpeg':'jpg','image/webp':'webp','image/gif':'gif'}[image.mime];const uri=await vscode.window.showSaveDialog({saveLabel:'Gem billede',filters:{Billede:[ext]}});if(uri)await vscode.workspace.fs.writeFile(uri,image.bytes);return;}
@@ -176,10 +178,10 @@ function activate(context){
         const folder=workingFolder();if(!folder)throw new Error('Åbn først en mappe i Explorer');
         const projectId=m.projectId;
         const files=await snapshot(folder);activeProjects=folders;
-        const run=await api('runs','POST',{projectId,prompt:m.prompt,files,attachments:m.attachments,bridge:true,projectName:folder.name});
+        const run=await api('runs','POST',{projectId,prompt:m.prompt,includePreviousConversations:m.includePreviousConversations===true,files,attachments:m.attachments,bridge:true,projectName:folder.name});
         localController?.abort();localController=new AbortController();activeFullAccess=false;activeFolder=folder;baseline=new Map(files.map(f=>[f.path,f.content]));changes=null;activeRun=run.id;activeProjectId=projectId;send({type:'started',runId:run.id,prompt:m.prompt,attachments:(m.attachments||[]).map(a=>({name:a.name}))});watch(run.id);
       }finally{starting=false;if(!activeRun)send({type:'idle'});}
-    }catch(e){send({type:m.type==='followup'?'followup-error':'error',text:e.message});if(!activeRun&&!starting)send({type:'idle'});}});
+    }catch(e){send({type:m.type==='followup'?'followup-error':m.type==='new-conversation'?'conversation-error':'error',text:e.message});if(!activeRun&&!starting)send({type:'idle'});}});
   }
 }
 function deactivate(){clearTimeout(pollTimer);}

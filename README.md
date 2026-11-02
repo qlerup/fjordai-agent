@@ -44,7 +44,7 @@ Supported logic nodes: conditions with AND/OR rules and yes/no outputs; text tem
 
 ## Prototype boundaries
 
-- Initial snapshot up to 300 files / 2 MB. On-demand reads up to 512 KB per file and 1,000 files / 16 MB per run. Changed output up to 2 MB.
+- Initial snapshot up to 300 files / 2 MB. On-demand reads default to 32 MB per file and 1,000 files / 128 MB per run. Changed text output defaults to 64 MB, configurable in the installation environment.
 - File lists cap at 5,000 results; searches cap at 100 matches / 8 MB inspected. Narrow searches using project and path prefix.
 - Known secret paths, binary files and symlinks are excluded. This is not a general secret scanner.
 - Graphs support concurrent branching and merges. Nodes linked by dependencies run in order; independent agents, routers and reviewer corrections can overlap. Agents share the working directory, so assign distinct file responsibilities when editing in parallel. Arbitrary code/function nodes and loops are not supported.
@@ -154,3 +154,13 @@ A Code Reviewer can opt into automatic escalation using the inspector's **Automa
 Normal review still uses the node's standard model and correction-round limit. When enabled, that model must classify the severity and cite runtime evidence IDs: actual file diffs, executed command results or earlier review feedback. Escalation can occur for major unresolved findings after a correction, complex architecture, critical security, data-loss/regression risks or important technical uncertainty. Prompt keywords and specialist claims alone do not qualify. At most one extra escalated review is allowed across the entire run, including reviewer reruns. It receives the evidence and prior feedback, keeps read access and does not restart implementation. Rejected or malformed reviews still block completion; a failed escalated call also fails the run.
 
 For VS Code tasks, file changes come from the conflict-check baseline and command evidence includes observed server/local command results. In other tasks, runtime diff/command events provide evidence. Evidence and repeated context are bounded; this is not a substitute for actually running relevant tests.
+
+## Fresh chat conversations
+
+Use **Ny samtale** in the browser or VS Code chat to clear the current transcript and start without earlier messages or compacted conversation memory. The workflow, file contents and archived run records remain unchanged. New runs use the project's new conversation ID; history is shared consistently across connected clients and survives restart. Finish or stop active work before starting a new conversation.
+
+The default file limit is 32 MB, returned text patches 64 MB and fetched workspace content 128 MB. Configure `FJORDAGENT_MAX_FILE_MB`, `FJORDAGENT_MAX_PATCH_MB` and `FJORDAGENT_MAX_WORKSPACE_MB` in the installation environment to adjust these limits. VS Code uses the server-advertised file limit. The small initial snapshot remains capped at 2 MB.
+
+New binary files, including large native crash dumps, are excluded from source patches before checking the text size limit. Existing text files cannot be replaced by binaries, and oversized text changes still fail with the offending filename. Docker disables core dumps to avoid storing large process-memory artifacts.
+
+Select **Medtag tidligere samtaler** explicitly on a message to include bounded context from the most recent archived conversations in the same project. It is off by default and resets after sending. Dynamic Orchestrators can answer questions directly during work, without waking specialists; additional implementation requests are routed to the appropriate workers while the run continues. The configured specialist cap applies to the entire run, including follow-ups. **Slet workflow** removes the workflow and its chat records after confirmation; it does not delete source files on the PC.

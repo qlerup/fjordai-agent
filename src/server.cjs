@@ -7,13 +7,14 @@ const { Auth } = require('./auth.cjs');
 const { Sessions } = require('./sessions.cjs');
 const { saveImage } = require('./images.cjs');
 const {changeReport}=require('./changes.cjs');
-const { projectContext } = require('./context.cjs');
+const { projectContext,archivedContext } = require('./context.cjs');
 const {createRunInput}=require('./run-input.cjs');
+const {routeLiveMessage}=require('./live-router.cjs');
 const { Store, validateWorkflow } = require('./store.cjs');
 const { runGraph,legacyGraph,validateGraph }=require('./graph.cjs');
 const { Codex, runWorkflow } = require('./codex.cjs');
 const { listModels } = require('./models.cjs');
-const { validateSnapshot, writeSnapshot, collectChanges, safePath, hash } = require('./workspace.cjs');
+const { validateSnapshot, writeSnapshot, collectChanges, safePath, hash,MAX_BYTES,MAX_FILE_BYTES,MAX_WORKSPACE_BYTES } = require('./workspace.cjs');
 
 function createApp({ dataDir = process.env.DATA_DIR || path.resolve('data'), codexFactory } = {}) {
   const store = new Store(dataDir);
@@ -23,7 +24,7 @@ function createApp({ dataDir = process.env.DATA_DIR || path.resolve('data'), cod
   for(const project of store.state.projects)fs.mkdirSync(path.join(workRoot,project.id),{recursive:true});
   const codex = codexFactory ? codexFactory() : new Codex({ home, cwd: workRoot });
   
-  const active = new Map(); const bridgeCaps = new Map(); const bridgePending = new Map();
+  const active = new Map();const startingProjects=new Set(); const bridgeCaps = new Map(); const bridgePending = new Map();
   const approvals = new Map(); const sessions = new Sessions(dataDir); const attempts = new Map();
   const browserSession = req => {
     const cookie = (req.headers.cookie || '').split(';').map(s=>s.trim()).find(s=>s.startsWith('fjordagent='))?.slice(11);
@@ -37,7 +38,7 @@ function createApp({ dataDir = process.env.DATA_DIR || path.resolve('data'), cod
   const json = (res, code, value, headers = {}) => { res.writeHead(code, { 'Content-Type':'application/json; charset=utf-8', 'Cache-Control':'no-store', ...headers }); res.end(JSON.stringify(value)); };
   async function body(req) {
     let size=0, chunks=[];
-    for await (const c of req) { size+=c.length; if(size>17*1024*1024) throw Object.assign(new Error('Beskeden er for stor'), { status:413 }); chunks.push(c); }
+    for await (const c of req) { size+=c.length; if(size>Math.max(17*1024*1024,MAX_BYTES*4)) throw Object.assign(new Error('Beskeden er for stor'), { status:413 }); chunks.push(c); }
     try { return JSON.parse(Buffer.concat(chunks).toString() || '{}'); } catch { throw Object.assign(new Error('Ugyldig JSON'), { status:400 }); }
   }
   const cleanup = setInterval(() => {
@@ -74,7 +75,7 @@ function createApp({ dataDir = process.env.DATA_DIR || path.resolve('data'), cod
         if(b.name==='project_read_file'&&(!args.project||args.project===cap.projectName)&&cap.files.some(f=>f.path===args.path)){
           let target=cap.cwd;for(const segment of args.path.split('/')){target=path.join(target,segment);if(fs.lstatSync(target).isSymbolicLink())return json(res,400,{error:'Symlink er ikke tilladt'});}
           const file=path.join(cap.cwd,args.path);const stat=fs.lstatSync(file);
-          if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink>1||stat.size>2097152)return json(res,400,{error:'Filen kan ikke læses'});
+          if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink>1||stat.size>MAX_FILE_BYTES)return json(res,400,{error:'Filen kan ikke læses'});
           return json(res,200,{path:args.path,content:fs.readFileSync(file,'utf8'),source:'working-copy'});
         }
         if(b.name==='project_run_command'&&(typeof args.command!=='string'||!args.command.trim()||args.command.length>8000||args.project||args.timeoutMs!==undefined&&(!Number.isInteger(args.timeoutMs)||args.timeoutMs<1000||args.timeoutMs>120000)))return json(res,400,{error:'Ugyldig lokal kommando'});
@@ -90,9 +91,9 @@ function createApp({ dataDir = process.env.DATA_DIR || path.resolve('data'), cod
           return json(res,fatal?502:400,{error:result.error});
         }
         if(b.name==='project_read_file'&&!result.referenceOnly){
-          if(typeof result.content!=='string'||Buffer.byteLength(result.content)>524288||result.content.includes('\0'))return json(res,400,{error:'Filindholdet er ugyldigt eller større end 512 KB'});
+          if(typeof result.content!=='string'||Buffer.byteLength(result.content)>MAX_FILE_BYTES||result.content.includes('\0'))return json(res,400,{error:'Filindholdet er ugyldigt eller overskrider filgrænsen på '+MAX_FILE_BYTES/1024/1024+' MB'});
           const total=cap.files.reduce((n,f)=>n+Buffer.byteLength(f.content),0)+Buffer.byteLength(result.content);
-          if(total>16*1024*1024||cap.files.length>=1000)return json(res,400,{error:'Arbejdskopien har nået grænsen på 16 MB / 1.000 filer'});
+          if(total>MAX_WORKSPACE_BYTES||cap.files.length>=1000)return json(res,400,{error:'Arbejdskopien har nået grænsen på '+MAX_WORKSPACE_BYTES/1024/1024+' MB / 1.000 filer'});
           const file=path.join(cap.cwd,args.path);
           // Never follow symlinks created by an agent in the partial working copy.
           let parent=cap.cwd;for(const part of args.path.split('/').slice(0,-1)){parent=path.join(parent,part);if(fs.existsSync(parent)&&!fs.lstatSync(parent).isDirectory())throw new Error('Ugyldig arbejdsmappe');if(fs.existsSync(parent)&&fs.lstatSync(parent).isSymbolicLink())throw new Error('Symlink er ikke tilladt');}
@@ -112,7 +113,7 @@ function createApp({ dataDir = process.env.DATA_DIR || path.resolve('data'), cod
         if(req.method==='POST')return json(res,200,{token:auth.issue()});
         if(req.method==='DELETE'){auth.revoke();return json(res,200,{ok:true});}
       }
-      if (p==='/api/state' && req.method==='GET') return json(res,200,{...store.state,workflows:store.state.projects.map(p=>({id:p.id,name:p.name,graph:p.graph,steps:p.graph.nodes.filter(n=>n.type==='agent')})),runs:store.state.runs.map(({events,changes,changeReport,...r})=>({...r,changeCount:changes?.length||0,...(changeReport?{changeSummary:{...changeReport,files:changeReport.files.map(({diff,...f})=>f)}}:{})})),active:[...active.keys()]});
+      if (p==='/api/state' && req.method==='GET') return json(res,200,{...store.state,limits:{fileBytes:MAX_FILE_BYTES,patchBytes:MAX_BYTES,workspaceBytes:MAX_WORKSPACE_BYTES},workflows:store.state.projects.map(p=>({id:p.id,name:p.name,graph:p.graph,steps:p.graph.nodes.filter(n=>n.type==='agent')})),runs:store.state.runs.map(({events,changes,changeReport,...r})=>({...r,changeCount:changes?.length||0,...(changeReport?{changeSummary:{...changeReport,files:changeReport.files.map(({diff,...f})=>f)}}:{})})),active:[...active.keys()]});
       if (p==='/api/account' && req.method==='GET') {
         try { return json(res,200,await codex.rpc('account/read',{refreshToken:false})); }
         catch(e) { return json(res,503,{error:e.message}); }
@@ -137,7 +138,18 @@ function createApp({ dataDir = process.env.DATA_DIR || path.resolve('data'), cod
         fs.writeFileSync(path.join(cwd,'README.md'),`# ${project.name}\n\nIsoleret testprojekt til FjordAgent.\n`);
         store.state.projects.push(project); store.save(); return json(res,201,project);
       }
+      const conversationMatch=p.match(/^\/api\/projects\/([\w-]+)\/conversation$/);
+      if(conversationMatch&&req.method==='POST'){
+        const project=store.state.projects.find(p=>p.id===conversationMatch[1]);if(!project)return json(res,404,{error:'Projektet findes ikke'});
+        if(startingProjects.has(project.id)||[...active.values()].some(a=>a.projectId===project.id))return json(res,409,{error:'Stop eller afslut den aktive opgave, før du starter en ny samtale.'});
+        project.conversationId=store.id();delete project.memory;store.save();return json(res,201,{conversationId:project.conversationId});
+      }
       const projectMatch=p.match(/^\/api\/projects\/([\w-]+)$/);
+      if(projectMatch&&req.method==='DELETE'){
+        const project=store.state.projects.find(p=>p.id===projectMatch[1]);if(!project)return json(res,404,{error:'Projektet findes ikke'});
+        if(startingProjects.has(project.id)||[...active.values()].some(a=>a.projectId===project.id))return json(res,409,{error:'Stop eller afslut opgaven før workflowet slettes'});
+        store.state.projects=store.state.projects.filter(p=>p.id!==project.id);store.state.runs=store.state.runs.filter(r=>r.projectId!==project.id);store.save();return json(res,200,{ok:true});
+      }
       if(projectMatch&&req.method==='PATCH'){
         const project=store.state.projects.find(p=>p.id===projectMatch[1]);if(!project)return json(res,404,{error:'Projektet findes ikke'});
         const b=await body(req);let graph=project.graph;
@@ -161,13 +173,13 @@ function createApp({ dataDir = process.env.DATA_DIR || path.resolve('data'), cod
       if (p==='/api/runs' && req.method==='POST') {
         const b=await body(req); const project=store.state.projects.find(x=>x.id===b.projectId); const workflow=project?{id:project.id,name:project.name,graph:project.graph,steps:project.graph.nodes.filter(n=>n.type==='agent')}:null;
         if(!project||!workflow||typeof b.prompt!=='string'||!b.prompt.trim()||b.prompt.length>20000) return json(res,400,{error:'Vælg projekt, og skriv en besked på højst 20.000 tegn'});
-        if(active.size>=2 || [...active.values()].some(a=>a.projectId===project.id)) return json(res,409,{error:'Projektet er optaget, eller begge kørselspladser er i brug'});
+        if(startingProjects.has(project.id)||active.size+startingProjects.size>=2 || [...active.values()].some(a=>a.projectId===project.id)) return json(res,409,{error:'Projektet er optaget, eller begge kørselspladser er i brug'});
         const startNodeId=workflow.graph?(b.startNodeId||project.startNodeId||workflow.graph.nodes.find(n=>n.type==='start')?.id):undefined;
         if(workflow.graph&&!workflow.graph.nodes.some(n=>n.id===startNodeId&&n.type==='start'))return json(res,400,{error:'Projektets startnode er ændret. Vælg en ny startnode på projektets lærred.'});
         let snapshot; if(b.files!==undefined){try{snapshot=validateSnapshot(b.files,b.bridge===true);}catch(e){return json(res,400,{error:e.message});}}
         let uploads;try{uploads=validateAttachments(b.attachments);}catch(e){return json(res,400,{error:e.message});}
-        const account=await codex.rpc('account/read',{refreshToken:false}); if(!account.account) return json(res,409,{error:'Forbind først en ChatGPT-konto på serveren'});
-        const run={id:store.id(),projectId:project.id,workflowId:workflow.id,startNodeId,prompt:b.prompt,status:'running',createdAt:new Date().toISOString(),events:[],answers:[],source:snapshot?'vscode':'server'};
+        let account;startingProjects.add(project.id);try{account=await codex.rpc('account/read',{refreshToken:false});}finally{startingProjects.delete(project.id);} if(!account.account) return json(res,409,{error:'Forbind først en ChatGPT-konto på serveren'});
+        const run={id:store.id(),projectId:project.id,workflowId:workflow.id,conversationId:project.conversationId,startNodeId,prompt:b.prompt,status:'running',createdAt:new Date().toISOString(),events:[],answers:[],source:snapshot?'vscode':'server'};
         run.fullAccess=project.fullAccess===true;run.autoApply=run.fullAccess&&!!snapshot;
         run.images=[];
         const cwd=snapshot?path.join(workRoot,'runs',run.id):path.join(workRoot,project.id);
@@ -182,6 +194,8 @@ function createApp({ dataDir = process.env.DATA_DIR || path.resolve('data'), cod
         let conversationHistory='';run.messages=[];
         const runInput=createRunInput({messages:run.messages,emit,save:()=>store.save(),route:async message=>{
           controller.signal.throwIfAborted();
+          if(message.includePreviousConversations)message.analysis='Brugeren har eksplicit bedt om tidligere samtaler:\n'+archivedContext(project,store.state.runs);
+          if(workflow.graph.executionMode==='dynamic')return routeLiveMessage({codex,cwd,workflow,prompt:message.text,originalPrompt:run.prompt,projectConnected:run.source==='vscode',messages:run.messages,events:run.events,previousContext:message.includePreviousConversations?archivedContext(project,store.state.runs):'',signal:controller.signal,fullAccess:run.fullAccess,emit:e=>emit({type:'input-routing',messageId:message.id,event:e})});
           return runGraph({workflow:structuredClone(workflow),startNodeId,codex,cwd,attachments,fullAccess:run.fullAccess,signal:controller.signal,routeOnly:true,prompt:message.text,history:(conversationHistory+'\nDen oprindelige opgave: '+run.prompt+'\nTidligere ekstra beskeder:\n'+runInput.snapshot().text).slice(-40000),emit:event=>{if(event.type==='node-completed'&&workflow.graph.nodes.some(n=>n.id===event.nodeId&&n.type==='analysis'))message.analysis=event.result;emit({type:'input-routing',messageId:message.id,event});}});
         },onError:e=>controller.abort(Object.assign(new Error('Den ekstra besked kunne ikke fordeles: '+e.message),{code:'INPUT_ROUTING_ERROR'}))});active.get(run.id).runInput=runInput;
         const approve=request=>new Promise(resolve=>{
@@ -195,9 +209,9 @@ function createApp({ dataDir = process.env.DATA_DIR || path.resolve('data'), cod
             const result=await runWorkflow({codex,cwd,fullAccess:run.fullAccess,prompt:JSON.stringify({previousSummary:summary,conversation:content}),steps:[{name:'Samtalehukommelse',taskMode:'analysis',access:'read',instructions:'Opsummér samtalen på dansk. Bevar brugerens mål, præferencer, beslutninger, begrænsninger, relevante filnavne og uafsluttede opgaver. Udfør ingen opgaver. Returnér kun JSON med summary på højst 12000 tegn.'}],structuredOutput:true,outputSchema:{type:'object',properties:{summary:{type:'string'}},required:['summary'],additionalProperties:false},emit,signal:controller.signal});
             const value=JSON.parse(result[0].text).summary;if(typeof value!=='string'||!value.trim()||value.length>12000)throw new Error('Samtalen kunne ikke komprimeres til en gyldig opsummering');return value;
           }});
-          conversationHistory=history;
+          conversationHistory=history+(b.includePreviousConversations===true?'\nBrugeren har eksplicit bedt om tidligere samtaler:\n'+archivedContext(project,store.state.runs):'');
           const onImage=(item,step)=>{const image=saveImage(item,{root:path.join(home,'generated_images'),directory:path.join(dataDir,'images',run.id),runId:run.id,name:step.name});run.images.push(image);store.save();return image;};
-          if(workflow.graph)return runGraph({workflow:structuredClone(workflow),startNodeId,codex,prompt:b.prompt,attachments,history,cwd,emit,signal:controller.signal,approve,config,projectBridge:!!bridgeToken,onImage,fullAccess:run.fullAccess,runInput,getReviewEvidence:snapshot?()=>{const report=changeReport(collectChanges(cwd,snapshot),snapshot);if(report.error)throw new Error(report.error);return report.files.slice(0,24).map(f=>({id:'file-'+hash(f.path).slice(0,16),kind:'change',text:f.path+'\n'+f.diff}));}:undefined});
+          if(workflow.graph)return runGraph({workflow:structuredClone(workflow),startNodeId,codex,prompt:b.prompt,attachments,history:conversationHistory,cwd,emit,signal:controller.signal,approve,config,projectBridge:!!bridgeToken,onImage,fullAccess:run.fullAccess,runInput,getReviewEvidence:snapshot?()=>{const report=changeReport(collectChanges(cwd,snapshot),snapshot);if(report.error)throw new Error(report.error);return report.files.slice(0,24).map(f=>({id:'file-'+hash(f.path).slice(0,16),kind:'change',text:f.path+'\n'+f.diff}));}:undefined});
         })()
           .then(answers=>{run.answers=answers;if(snapshot){run.changes=collectChanges(cwd,snapshot);run.changeReport=changeReport(run.changes,snapshot);}run.status='completed';emit({type:'result',answer:answers.at(-1),details:answers.slice(0,-1)});})
           .catch(e=>{run.status=controller.signal.aborted&&!['PROJECT_CONNECTION_ERROR','INPUT_ROUTING_ERROR'].includes(controller.signal.reason?.code)?'interrupted':'failed';run.error=e.message;emit({type:'error',text:e.message});})
@@ -210,7 +224,7 @@ function createApp({ dataDir = process.env.DATA_DIR || path.resolve('data'), cod
         const run=store.state.runs.find(r=>r.id===messageMatch[1]);if(!run)return json(res,404,{error:'Opgaven findes ikke'});
         const b=await body(req),current=active.get(run.id);
         if(run.status!=='running'||!current?.runInput||current.controller.signal.aborted)return json(res,409,{error:'Opgaven er afsluttet. Send beskeden som en ny opgave.'});
-        const message=current.runInput.append(b.text,b.clientId);return json(res,202,{message});
+        const message=current.runInput.append(b.text,b.clientId,b.includePreviousConversations===true);return json(res,202,{message});
       }
       const applicationMatch=p.match(/^\/api\/runs\/([\w-]+)\/application$/);
       if(applicationMatch&&req.method==='POST'){

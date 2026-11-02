@@ -9,12 +9,19 @@ services:
     volumes:
       - data:/data
     environment:
+      FJORDAGENT_MAX_FILE_MB: "${FJORDAGENT_MAX_FILE_MB:-32}"
+      FJORDAGENT_MAX_PATCH_MB: "${FJORDAGENT_MAX_PATCH_MB:-64}"
+      FJORDAGENT_MAX_WORKSPACE_MB: "${FJORDAGENT_MAX_WORKSPACE_MB:-128}"
       SECURE_COOKIE: "${SECURE_COOKIE:-false}"
       FJORDAGENT_SSH_HOSTS: "${FJORDAGENT_SSH_HOSTS:-}"
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
     pids_limit: 256
     mem_limit: 1536m
 volumes:

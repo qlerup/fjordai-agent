@@ -1,7 +1,7 @@
 const LIMIT=36000,CHUNK=24000;
-function record(run){return 'Bruger: '+run.prompt+'\n'+(run.messages||[]).map(m=>'Ekstra besked fra bruger: '+m.text+'\n').join('')+run.answers.map(a=>a.name+': '+a.text).join('\n')+(run.images?.length?'\nGenererede billeder: '+run.images.length:'');}
+function record(run){return 'Bruger: '+run.prompt+'\n'+(run.messages||[]).map(m=>'Ekstra besked fra bruger: '+m.text+'\n'+(m.answer?'Orchestrator: '+m.answer+'\n':'')).join('')+run.answers.map(a=>a.name+': '+a.text).join('\n')+(run.images?.length?'\nGenererede billeder: '+run.images.length:'');}
 async function projectContext({project,runs,summarize,save,emit}){
- const memory=project.memory,completed=runs.filter(r=>r.projectId===project.id&&r.status==='completed');
+ const memory=project.memory,completed=runs.filter(r=>r.projectId===project.id&&r.conversationId===project.conversationId&&r.status==='completed');
  const previous=memory?.throughRunId?completed.findIndex(r=>r.id===memory.throughRunId):-1;
  const pending=previous>=0?completed.slice(previous+1):completed.filter(r=>!memory?.throughCreatedAt||r.createdAt>memory.throughCreatedAt);
  const prefix=memory?.summary?'Tidligere samtale (opsummering):\n'+memory.summary+'\n\n':'';
@@ -17,4 +17,5 @@ async function projectContext({project,runs,summarize,save,emit}){
  emit({type:'compaction',state:'completed',scope:'project',name:'Samtalen'});
  return 'Tidligere samtale (opsummering):\n'+summary+'\n\n'+recent.map(record).join('\n\n');
 }
-module.exports={projectContext};
+function archivedContext(project,runs){return runs.filter(r=>r.projectId===project.id&&r.conversationId!==project.conversationId&&r.status==='completed').slice(-4).map(record).join('\n\n').slice(-12000);}
+module.exports={projectContext,archivedContext};
