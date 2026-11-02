@@ -1,0 +1,12 @@
+node_modules/
+data/
+.env
+*.vsix
+extension/runtime/
+playwright-report/
+
+/test-results/
+
+/test-results-latest.txt
+*.tgz
+*.zip

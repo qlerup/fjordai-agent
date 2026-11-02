@@ -1,0 +1,41 @@
+const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs');const os=require('node:os');const path=require('node:path');const {createApp}=require('../src/server.cjs');
+test('browser sessions survive server restarts and logout remains revoked after another restart',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'fjordagent-session-restart-'));
+ let app,base;
+ async function restart(){if(app){app.close();await new Promise(r=>app.server.close(r));}app=createApp({dataDir:dir,codexFactory:()=>({close(){}})});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));base='http://127.0.0.1:'+app.server.address().port;}
+ t.after(()=>{app?.close();fs.rmSync(dir,{recursive:true,force:true});});await restart();
+ const response=await fetch(base+'/api/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'owner',password:'correct-password-123'})});
+ assert.equal(response.status,200);const cookie=response.headers.get('set-cookie').split(';')[0];
+ const state=()=>fetch(base+'/api/state',{headers:{Cookie:cookie}});
+ assert.equal((await state()).status,200);await restart();
+ assert.equal((await state()).status,200,'existing login must survive replacing the server process');
+ assert.equal((await fetch(base+'/api/state',{headers:{Cookie:cookie+'tampered'}})).status,401);
+ assert.equal((await fetch(base+'/api/session',{method:'DELETE',headers:{Cookie:cookie}})).status,200);
+ await restart();assert.equal((await state()).status,401,'logout must survive replacing the server process');
+});
+test('first-run account is single-use, password is hashed, login persists and client keys can be revoked',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'fjordagent-auth-'));fs.writeFileSync(path.join(dir,'admin-token'),'legacy-secret');
+ let app=createApp({dataDir:dir,codexFactory:()=>({close(){}})});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));t.after(()=>{app.close();fs.rmSync(dir,{recursive:true,force:true});});
+ let base='http://127.0.0.1:'+app.server.address().port;
+ const req=(p,method='GET',data,headers={})=>fetch(base+'/api/'+p,{method,headers:{'Content-Type':'application/json',...headers},...(data?{body:JSON.stringify(data)}:{})});
+ assert.deepEqual(await(await req('setup')).json(),{setupRequired:true});
+ assert.equal((await req('state','GET',null,{Authorization:'Bearer legacy-secret'})).status,401);
+ assert.equal((await req('setup','POST',{username:'owner',password:'short'})).status,400);
+ const credentials={username:'owner',password:'correct-password-123'};
+ const results=await Promise.all([req('setup','POST',credentials),req('setup','POST',credentials)]);assert.deepEqual(results.map(r=>r.status).sort(),[200,409]);
+ const cookie=results.find(r=>r.status===200).headers.get('set-cookie').split(';')[0];
+ assert.equal((await req('state','GET',null,{Cookie:cookie})).status,200);assert.deepEqual(await(await req('setup')).json(),{setupRequired:false});
+ const authFile=fs.readFileSync(path.join(dir,'auth.json'),'utf8');assert.ok(!authFile.includes(credentials.password));assert.equal(JSON.parse(authFile).passwordHash.length,64);
+ assert.equal((await req('session','POST',{...credentials,password:'incorrect'})).status,401);
+ const key=(await(await req('connection-key','POST',null,{Cookie:cookie})).json()).token;assert.ok(key);
+ assert.equal((await req('state','GET',null,{Authorization:'Bearer '+key})).status,200);
+ assert.equal((await req('connection-key','POST',null,{Authorization:'Bearer '+key})).status,403);
+ await req('connection-key','DELETE',null,{Cookie:cookie});assert.equal((await req('state','GET',null,{Authorization:'Bearer '+key})).status,401);
+ await req('session','DELETE',null,{Cookie:cookie});assert.equal((await req('state','GET',null,{Cookie:cookie})).status,401);
+ app.close();app=createApp({dataDir:dir,codexFactory:()=>({close(){}})});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));base='http://127.0.0.1:'+app.server.address().port;
+ assert.equal((await req('setup','POST',credentials)).status,409);assert.equal((await req('session','POST',credentials)).status,200);
+ assert.equal((await req('session','POST',{token:'legacy-secret'})).status,401);
+ const state=await(await req('session','POST',credentials)).json();assert.ok(!JSON.stringify(state).includes('passwordHash'));
+ for(let i=0;i<10;i++)assert.equal((await req('session','POST',{...credentials,password:'wrong'})).status,401);
+ assert.equal((await req('session','POST',credentials)).status,429);
+});

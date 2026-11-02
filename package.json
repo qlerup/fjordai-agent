@@ -1,0 +1,20 @@
+{
+  "name": "fjordagent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted Codex workflow workspace",
+  "scripts": {
+    "start": "node src/server.cjs",
+    "test": "node --test test/*.test.cjs",
+    "package:extension": "node deploy/package-extension.cjs",
+    "build:factory": "node deploy/build-factory.cjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "three": "0.187.0"
+  }
+}

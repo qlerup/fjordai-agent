@@ -1,0 +1,78 @@
+{
+  "name": "fjordagent",
+  "displayName": "FjordAI Agent",
+  "description": "Chat with your self-hosted agent workflows from VS Code",
+  "version": "0.1.14",
+  "publisher": "fjordcode",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.143.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.cjs",
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onView:fjordagent.chatView"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "fjordagent.chat",
+        "title": "FjordAI Agent: Open chat"
+      },
+      {
+        "command": "fjordagent.connect",
+        "title": "FjordAI Agent: Connect to server",
+        "icon": "$(plug)"
+      }
+    ],
+    "configuration": {
+      "title": "FjordAI Agent",
+      "properties": {
+        "fjordagent.serverUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "URL of your self-hosted FjordAgent server"
+        }
+      }
+    },
+    "viewsContainers": {
+      "secondarySidebar": [
+        {
+          "id": "fjordagent",
+          "title": "FjordAI Agent",
+          "icon": "media/fjordagent.svg"
+        }
+      ]
+    },
+    "views": {
+      "fjordagent": [
+        {
+          "id": "fjordagent.chatView",
+          "name": "Chat",
+          "type": "webview"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "fjordagent.connect",
+          "when": "view == fjordagent.chatView",
+          "group": "navigation"
+        }
+      ]
+    }
+  }
+}

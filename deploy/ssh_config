@@ -1,0 +1,3 @@
+# Optional installation-specific hosts and credentials live in the private data
+# volume, never in the image or project snapshots. Missing config is allowed.
+Include /data/ssh/config

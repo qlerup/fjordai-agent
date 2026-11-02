@@ -1,0 +1,21 @@
+services:
+  app:
+    build: .
+    image: fjordagent:0.1.0
+    init: true
+    restart: unless-stopped
+    ports:
+      - "3080:3080"
+    volumes:
+      - data:/data
+    environment:
+      SECURE_COOKIE: "${SECURE_COOKIE:-false}"
+      FJORDAGENT_SSH_HOSTS: "${FJORDAGENT_SSH_HOSTS:-}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1536m
+volumes:
+  data:
