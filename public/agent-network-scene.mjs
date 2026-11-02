@@ -9,7 +9,7 @@ const roleColor=n=>ROLE_COLORS[n.type]||ROLE_COLORS.agent;
 export function buildAgentNetwork(factory,project,T){
  const f=factory;f.networkMode=true;f.playback.networkMode=true;f.networkSignals=new Map();
  const stations=agentNetworkStations(project);
- const radius=Math.max(44,...stations.map(s=>Math.hypot(s.x,s.z)+8));
+ const radius=Math.max(28,...stations.map(s=>Math.hypot(s.x,s.z)+6));
  const floor=new T.Mesh(new T.CircleGeometry(radius,96),new T.MeshStandardMaterial({color:0x091a2b,metalness:.22,roughness:.94}));
  floor.rotation.x=-Math.PI/2;floor.position.y=-.35;f.root.add(floor);
  const grid=new T.GridHelper(radius*2,Math.min(100,Math.round(radius*2)),0x245570,0x19364d);
@@ -103,7 +103,8 @@ export function syncAgentNetwork(factory,T){
  for(const m of f.machines){
   const id=m.node.id,escalated=f.motion.matches?(f.live.events||[]).findLast(e=>e.type==='review-escalated'&&e.nodeId===id):f.playback.escalations[id];
   let state=nodes[id]||'idle';
-  const changed=f.motion.matches?(f.live.events||[]).findLast(e=>e.type==='review'&&e.nodeId===id&&!e.approved):f.playback.reviews[id]==='changes';
+  const latestReview=f.motion.matches?(f.live.events||[]).findLast(e=>e.type==='review'&&e.nodeId===id):null;
+  const changed=f.motion.matches?latestReview?.approved===false:f.playback.reviews[id]==='changes';
   if(state==='completed'&&changed)state='revision';
   m.label.dataset.state=state;
   const model=typeof escalated==='string'?escalated:escalated?.model;
