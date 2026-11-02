@@ -1,4 +1,4 @@
-const {test}=require('node:test');const assert=require('node:assert/strict');const {EventEmitter}=require('node:events');const {validateGraph,runGraph,legacyGraph,evaluateCondition}=require('../src/graph.cjs');
+const {test}=require('node:test');const assert=require('node:assert/strict');const {EventEmitter}=require('node:events');const {validateGraph,runGraph,legacyGraph,evaluateCondition,buildDynamicGraph}=require('../src/graph.cjs');
 const start={id:'s',type:'start',name:'Start'},end={id:'e',type:'end',name:'Slut'};
 const agent=id=>({id,type:'agent',name:id,instructions:'Do '+id,access:'read',model:''});
 const edge=(source,target,port='out')=>({source,target,port});
@@ -15,3 +15,35 @@ test('existing project/workflow data migrates into one project graph without dup
  const first=new Store(dir);assert.equal(first.state.projects.length,2);assert.equal(first.state.projects[0].graph.nodes.find(n=>n.type==='agent').name,'Specialist');assert.equal(first.state.projects[0].workflowId,undefined);assert.equal(first.state.projects[0].startNodeId,'start');assert.equal(new Store(dir).state.projects.length,2);
 });
 test('numeric conditions use the incoming value rather than formatted context labels',async()=>{const graph={nodes:[start,{id:'value',type:'text',name:'Value',template:'{{prompt}}'},{id:'c',type:'condition',name:'Number?',match:'all',rules:[{source:'input',op:'greater',value:'3'}]},agent('yes'),agent('no'),end],edges:[edge('s','value'),edge('value','c'),edge('c','yes','yes'),edge('c','no','no'),edge('yes','e'),edge('no','e')]};const r=await runGraph({workflow:{graph},codex:new Fake(),prompt:'5',cwd:'/tmp',emit:()=>{}});assert.deepEqual(r.map(a=>a.name),['yes']);});
+
+// Connectionless teams are opt-in; the saved manual topology is never overwritten.
+test('dynamic workflows allow disconnected specialists and synthesize a temporary route',()=>{
+ const saved={executionMode:'dynamic',maxActiveAgents:2,nodes:[start,agent('frontend'),agent('backend'),end],edges:[]};
+ assert.doesNotThrow(()=>validateGraph(saved));
+ assert.throws(()=>validateGraph({...saved,executionMode:'manual'}),/forbundet|Forbind/);
+ const original=JSON.stringify(saved);
+ const runtime=buildDynamicGraph(validateGraph(saved),'s');
+ assert.doesNotThrow(()=>validateGraph(runtime));
+ assert.equal(runtime.edges.filter(e=>e.source==='s').length,1);
+ assert.equal(runtime.edges.filter(e=>e.target==='frontend').length,1);
+ assert.equal(runtime.edges.filter(e=>e.target==='backend').length,1);
+ assert.equal(JSON.stringify(saved),original);
+});
+test('dynamic team chooses only required agents and returns a combined output',async()=>{
+ const graph={executionMode:'dynamic',maxActiveAgents:1,nodes:[start,agent('frontend'),agent('backend'),end],edges:[]};
+ const c=new Fake(['backend']),events=[];
+ const result=await runGraph({workflow:{graph},codex:c,prompt:'Build API',cwd:'/tmp',emit:e=>events.push(e)});
+ assert.deepEqual(result.filter(r=>r.nodeId==='frontend'||r.nodeId==='backend').map(r=>r.nodeId),['backend']);
+ assert.equal(result.at(-1).name,'Fælles resultat');
+ assert.match(result.at(-1).text,/backend:/);
+ assert.ok(events.some(e=>e.type==='branch'&&e.targets.includes('backend')));
+ assert.equal(graph.edges.length,0);
+ await assert.rejects(runGraph({workflow:{graph},codex:new Fake(['frontend','backend']),prompt:'Build API',cwd:'/tmp',emit:()=>{}}),/ugyldig/);
+});
+test('dynamic mode rejects unsupported nodes, limits and ambiguous orchestrators',()=>{
+ const graph={executionMode:'dynamic',maxActiveAgents:4,nodes:[start,agent('a'),end],edges:[]};
+ assert.throws(()=>validateGraph({...graph,maxActiveAgents:20}),/1–16/);
+ assert.throws(()=>validateGraph({...graph,nodes:[...graph.nodes,{id:'t',type:'text',name:'Text',template:'x'}]}),/Dynamisk team/);
+ const router=id=>({id,type:'router',name:id,instructions:'Route',routingMode:'ai',access:'read'});
+ assert.throws(()=>validateGraph({...graph,nodes:[...graph.nodes,router('r1'),router('r2')]}),/højst én Fordeler/);
+});
