@@ -2,17 +2,19 @@ const http=require('node:http'),path=require('node:path'),{randomBytes}=require(
 const validText=(v,max)=>typeof v==='string'&&v.trim()&&v.length<=max;
 
 // One in-memory channel per graph run. No messages or credentials cross runs.
-function createTeam({nodes,prompt,emit,signal,route}){
+function createTeam({nodes,prompt,emit,signal,route,compact=false,maxActiveAgents=16}){
  const byId=new Map(nodes.map(n=>[n.id,n])),groups=[],caps=new Map(),tasks=[];let server,starting,closed=false;
  function register(source,edges){
-  const members=[...new Set(edges.map(e=>e.target))].filter(id=>byId.get(id)?.type==='agent');
+  const active=[...new Set(edges.map(e=>e.target))].filter(id=>byId.get(id)?.type==='agent');
+  if(compact&&(byId.get(source)?.type!=='router'||!active.length))return;
+  const members=compact?nodes.filter(n=>n.type==='agent').map(n=>n.id):active;
   if(members.length<2)return;
   const id=source+':'+groups.length;
-  groups.push({id,source,members,messages:[],results:new Map(),requests:0,queue:Promise.resolve()});
-  emit({type:'team',kind:'assignment',teamId:id,from:'Fælles opgave',text:members.map(id=>byId.get(id).name).join(', ')+' arbejder sammen om samme forespørgsel.'});
+  groups.push({id,source,members,activated:new Set(active),messages:[],results:new Map(),requests:0,queue:Promise.resolve()});
+  emit({type:'team',kind:'assignment',teamId:id,from:'Fælles opgave',text:active.map(id=>byId.get(id).name).join(', ')+' arbejder sammen om samme forespørgsel.'});
  }
  const teamsFor=id=>groups.filter(g=>g.members.includes(id));
- function context(id){return teamsFor(id).map(g=>({teamId:g.id,task:prompt,members:g.members.map(key=>({id:key,name:byId.get(key).name,role:byId.get(key).instructions})),messages:g.messages.slice(-24),tasks:tasks.filter(t=>t.teamId===g.id),results:[...g.results].map(([nodeId,text])=>({nodeId,name:byId.get(nodeId).name,text}))}));}
+ function context(id){return teamsFor(id).map(g=>({teamId:g.id,task:prompt,members:g.members.map(key=>({id:key,name:byId.get(key).name,active:g.activated.has(key),role:(byId.get(key).instructions||'').slice(0,compact?1000:12000)})),messages:g.messages.slice(compact?-8:-24),tasks:tasks.filter(t=>t.teamId===g.id),results:[...g.results].map(([nodeId,text])=>({nodeId,name:byId.get(nodeId).name,text:compact?text.slice(-1600):text}))}));}
  function post(g,kind,from,text,to){
   if(g.messages.length>=64)g.messages.shift();
   const message={kind,from,text,...(to?{to}: {}),...(['task-request','task'].includes(kind)?{transport:'drone'}:{})};g.messages.push(message);
@@ -41,6 +43,8 @@ function createTeam({nodes,prompt,emit,signal,route}){
     post(g,'task-request',id,args.task.trim(),g.source);
     const choice=await route({source:g.source,members:g.members,from:id,task:args.task.trim(),context:context(id)});
     signal?.throwIfAborted();if(!g.members.includes(choice.target)||choice.target===id||!validText(choice.reason,4000))throw Error('Fordeleren valgte en ugyldig teammodtager');
+    if(compact&&!g.activated.has(choice.target)&&g.activated.size>=maxActiveAgents)throw Error('Teamet har nået grænsen for aktive specialister');
+    g.activated.add(choice.target);
     const task={id:randomBytes(12).toString('hex'),teamId:g.id,from:id,via:g.source,to:choice.target,text:args.task.trim(),status:'pending'};tasks.push(task);post(g,'task',g.source,choice.reason+'\n\nOpgave: '+task.text,choice.target);
     return{taskId:task.id,target:choice.target,status:'pending',message:'Fordeleren har sat opgaven i kø hos modtageren. Den udføres før samling/review; den er endnu ikke færdig.'};
    });g.queue=job.catch(e=>{g.failed=e.message;if(!closed)post(g,'error',g.source,'Fordeling mislykkedes: '+e.message,id);});return job;
@@ -63,16 +67,17 @@ function createTeam({nodes,prompt,emit,signal,route}){
  async function connect(id){
   if(!teamsFor(id).length)return null;
   await start();signal?.throwIfAborted();const token=randomBytes(32).toString('hex');caps.set(token,id);
-  return{context:JSON.stringify(context(id)).slice(-36000),config:{fjordagent_team:{command:process.execPath,args:[path.join(__dirname,'team-bridge.cjs')],env:{FJORDAGENT_TEAM_URL:'http://127.0.0.1:'+server.address().port+'/team',FJORDAGENT_TEAM_TOKEN:token},default_tools_approval_mode:'approve',tool_timeout_sec:180}},close:()=>caps.delete(token)};
+  return{context:JSON.stringify(context(id)).slice(compact?-14000:-36000),config:{fjordagent_team:{command:process.execPath,args:[path.join(__dirname,'team-bridge.cjs')],env:{FJORDAGENT_TEAM_URL:'http://127.0.0.1:'+server.address().port+'/team',FJORDAGENT_TEAM_TOKEN:token},default_tools_approval_mode:'approve',tool_timeout_sec:180}},close:()=>caps.delete(token)};
  }
  function result(id,text){for(const g of teamsFor(id)){g.results.set(id,text.slice(-6000));post(g,'result',id,text.slice(-4000));}}
  const takeTasks=id=>tasks.filter(t=>t.to===id&&t.status==='pending').map(t=>{t.status='running';return{...t};});
  function finishTasks(taken,failed=false){for(const item of taken){const task=tasks.find(t=>t.id===item.id);task.status=failed?'failed':'completed';const g=groups.find(g=>g.id===task.teamId);post(g,failed?'error':'task-completed',task.to,(failed?'Teamopgaven mislykkedes: ':'Teamopgaven er udført: ')+task.text,task.via);}}
  const pendingTargets=()=>[...new Set(tasks.filter(t=>t.status==='pending').map(t=>t.to))];
- const relevantGroups=ids=>groups.filter(g=>!ids||g.members.some(id=>ids.has(id)));
- function assertSettled(ids){const relevant=relevantGroups(ids),failed=relevant.find(g=>g.failed);if(failed)throw Error('En ekstra teamopgave kunne ikke fordeles: '+failed.failed);if(tasks.some(t=>(!ids||ids.has(t.to))&&t.status!=='completed'))throw Error('Teamet har ekstra opgaver, som endnu ikke er udført. Resultatet er ikke sendt videre.');}
+ const relevantGroups=ids=>groups.filter(g=>compact||!ids||g.members.some(id=>ids.has(id)));
+ const hasOutstandingTasks=()=>tasks.some(t=>t.status==='pending'||t.status==='running');
+ function assertSettled(ids){const relevant=relevantGroups(ids),failed=relevant.find(g=>g.failed);if(failed)throw Error('En ekstra teamopgave kunne ikke fordeles: '+failed.failed);if(tasks.some(t=>(compact||!ids||ids.has(t.to))&&t.status!=='completed'))throw Error('Teamet har ekstra opgaver, som endnu ikke er udført. Resultatet er ikke sendt videre.');}
  function close(){closed=true;caps.clear();server?.close();server?.closeAllConnections();}
  const reviewContext=ids=>JSON.stringify(groups.filter(g=>g.members.some(id=>ids.includes(id))).map(g=>({teamId:g.id,messages:g.messages.slice(-24)}))).slice(-36000);
- return{register,connect,result,context,reviewContext,takeTasks,finishTasks,pendingTargets,assertSettled,close};
+ return{register,connect,result,context,reviewContext,takeTasks,finishTasks,pendingTargets,hasOutstandingTasks,assertSettled,close};
 }
 module.exports={createTeam};

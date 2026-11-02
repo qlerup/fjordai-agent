@@ -8,6 +8,10 @@ function legacyGraph(steps){const nodes=[{id:'start',type:'start',name:'Start',x
 function topological(graph){const indegree=new Map(graph.nodes.map(n=>[n.id,0]));for(const e of graph.edges)indegree.set(e.target,indegree.get(e.target)+1);const queue=graph.nodes.filter(n=>!indegree.get(n.id)).map(n=>n.id),order=[];while(queue.length){const id=queue.shift();order.push(id);for(const e of graph.edges.filter(e=>e.source===id)){indegree.set(e.target,indegree.get(e.target)-1);if(!indegree.get(e.target))queue.push(e.target);}}if(order.length!==graph.nodes.length)throw new Error('Workflowet har en cirkel. Forbindelser skal gå fremad uden løkker.');return order;}
 function validateGraph(input){
  if(!input||!Array.isArray(input.nodes)||!Array.isArray(input.edges)||input.nodes.length<2||input.nodes.length>32||input.edges.length>96)throw new Error('Lærredet skal have 2–32 noder og højst 96 forbindelser');
+ const executionMode=input.executionMode||'manual';
+ if(!['manual','dynamic'].includes(executionMode))throw new Error('Ugyldig workflow-tilstand');
+ const maxActiveAgents=input.maxActiveAgents??4;
+ if(executionMode==='dynamic'&&(!Number.isInteger(maxActiveAgents)||maxActiveAgents<1||maxActiveAgents>16))throw new Error('Dynamiske teams kræver 1–16 samtidige agenter');
  const ids=new Set();const nodes=input.nodes.map(n=>{
   if(!text(n.id,80)||!/^[-\w]+$/.test(n.id)||ids.has(n.id)||!TYPES.includes(n.type)||!text(n.name,60))throw new Error('Ugyldig node eller gentaget node-id');ids.add(n.id);
   const item={id:n.id,type:n.type,name:n.name.trim(),x:Number.isFinite(n.x)?Math.max(0,Math.min(6000,n.x)):100,y:Number.isFinite(n.y)?Math.max(0,Math.min(4000,n.y)):100};
@@ -17,7 +21,7 @@ function validateGraph(input){
    if(!Number.isInteger(limit)||limit<1||limit>5||!['all','selected'].includes(scope)||!Array.isArray(targets)||targets.length>32||new Set(targets).size!==targets.length||targets.some(id=>typeof id!=='string')||scope==='selected'&&!targets.length)throw new Error('Code Reviewer kræver 1–5 rettelsesrunder og gyldige modtagere');
    Object.assign(item,{maxRounds:limit,reviewScope:scope,reviewTargets:targets});
   }
-  if(n.type==='router'){if(n.routingMode!==undefined&&!['ai','analysis'].includes(n.routingMode))throw new Error('Ugyldig beslutningskilde');if(n.routingMode==='analysis'&&!n.routes)throw new Error('En fordeler med Inputanalyse kræver navngivne udgange');item.routingMode=n.routingMode||'ai';}
+  if(n.type==='router'){if(n.routingMode!==undefined&&!['ai','analysis'].includes(n.routingMode))throw new Error('Ugyldig beslutningskilde');if(n.routingMode==='analysis'&&!n.routes)throw new Error('En fordeler med Inputanalyse kræver navngivne udgange');item.routingMode=n.routingMode||'ai';if(n.maxAgents!==undefined){if(!Number.isInteger(n.maxAgents)||n.maxAgents<1||n.maxAgents>32)throw new Error('Ugyldig grænse for aktive agenter');item.maxAgents=n.maxAgents;}}
   if(['analysis','router'].includes(n.type)&&n.routes!==undefined){
    if(!Array.isArray(n.routes)||!n.routes.length||n.routes.length>8||!['one','multiple'].includes(n.routeMode||'one')||!['prompt','result','both'].includes(n.routingInput||'both'))throw new Error('Fordeleren kræver 1–8 udgange og en gyldig fordelingsregel');
    const ports=new Set();item.routes=n.routes.map(r=>{if(!text(r.id,60)||!/^[-\w]+$/.test(r.id)||ports.has(r.id)||!text(r.name,60)||typeof r.rule!=='string'||r.rule.length>2000)throw new Error('Ugyldig eller gentaget fordelerudgang');ports.add(r.id);return{id:r.id,name:r.name.trim(),rule:r.rule};});
@@ -28,7 +32,12 @@ function validateGraph(input){
   return item;
  });
  const byId=new Map(nodes.map(n=>[n.id,n])),seen=new Set();const edges=input.edges.map(e=>{const a=byId.get(e.source),b=byId.get(e.target),port=e.port||'out',key=e.source+':'+port+':'+e.target;const validPort=a?.type==='condition'?['yes','no'].includes(port):['analysis','router'].includes(a?.type)&&a.routes?a.routes.some(r=>r.id===port):port==='out';if(!a||!b||a===b||a.type==='end'||b.type==='start'||seen.has(key)||!validPort)throw new Error('Ugyldig forbindelse');seen.add(key);return{source:e.source,target:e.target,port};});
- const graph={nodes,edges};topological(graph);const starts=nodes.filter(n=>n.type==='start');if(!starts.length)throw new Error('Tilføj mindst én startnode');if(!nodes.some(n=>n.type==='agent'))throw new Error('Tilføj mindst én agent');
+ const graph={nodes,edges,executionMode,...(executionMode==='dynamic'?{maxActiveAgents}: {})};topological(graph);const starts=nodes.filter(n=>n.type==='start');if(!starts.length)throw new Error('Tilføj mindst én startnode');if(!nodes.some(n=>n.type==='agent'))throw new Error('Tilføj mindst én agent');
+ if(executionMode==='dynamic'){
+  if(nodes.some(n=>!['start','router','agent','review','end'].includes(n.type)))throw new Error('Dynamisk team understøtter Start, Fordeler, Agent, Reviewer og Svar. Vælg manuelt workflow for andre nodetyper.');
+  if(nodes.filter(n=>n.type==='router').length>1||nodes.filter(n=>n.type==='review').length>1)throw new Error('Dynamisk team understøtter højst én Fordeler og én Reviewer');
+  return graph;
+ }
  for(const reviewer of nodes.filter(n=>n.type==='review')){const before=ancestors(graph,reviewer.id),agents=nodes.filter(n=>n.type==='agent'&&before.has(n.id));if(!agents.length||reviewer.reviewTargets.some(id=>!agents.some(n=>n.id===id)))throw new Error('Code Reviewer kan kun sende rettelser til agenter før review-blokken');}
  const reachable=new Set(starts.map(n=>n.id));for(const id of topological(graph))if(reachable.has(id))for(const e of edges.filter(e=>e.source===id))reachable.add(e.target);
  if(reachable.size!==nodes.length)throw new Error('Alle noder skal være forbundet til en startnode');
@@ -37,16 +46,44 @@ function validateGraph(input){
  return graph;
 }
 function evaluateCondition(node,prompt,input){const tests=node.rules.map(r=>{const raw=r.source==='prompt'?prompt:input,a=raw.toLocaleLowerCase(),b=r.value.toLocaleLowerCase();if(r.op==='contains')return a.includes(b);if(r.op==='notContains')return !a.includes(b);if(r.op==='equals')return a.trim()===b.trim();if(r.op==='empty')return !a.trim();const x=Number(raw),y=Number(r.value);return Number.isFinite(x)&&Number.isFinite(y)&&(r.op==='greater'?x>y:x<y);});return node.match==='all'?tests.every(Boolean):tests.some(Boolean);}
+
+function buildDynamicGraph(graph,startNodeId){
+ const used=new Set(graph.nodes.map(n=>n.id));
+ const id=stem=>{let candidate=stem,i=1;while(used.has(candidate))candidate=stem+'-'+i++;used.add(candidate);return candidate;};
+ const start=graph.nodes.find(n=>n.id===(startNodeId||graph.nodes.find(x=>x.type==='start')?.id)&&n.type==='start');
+ if(!start)throw new Error('Vælg en gyldig startnode til det dynamiske workflow');
+ const agents=graph.nodes.filter(n=>n.type==='agent');
+ const router=graph.nodes.find(n=>n.type==='router');
+ const reviewer=graph.nodes.find(n=>n.type==='review');
+ const end=graph.nodes.find(n=>n.type==='end')||{id:id('__fjord_team_end'),type:'end',name:'Fælles resultat',x:1000,y:150};
+ const distributor={...(router||{id:id('__fjord_team_router'),type:'router',name:'Orchestrator',x:300,y:150,model:'',reasoningEffort:'',access:'read'}),instructions:(router?.instructions||'Vælg kun de specialister der er nødvendige for brugerens opgave.')+'\nUdfør ikke selv udviklingsarbejdet. Aktivér så få specialister som nødvendigt, og vælg kun noder der har ansvar for delopgaven. Brug deres navne og roller. Returnér kun gyldig JSON.',routingMode:'ai',routeMode:'multiple',routingInput:'prompt',routes:undefined,maxAgents:Math.min(graph.maxActiveAgents||4,agents.length)};
+ const merge={id:id('__fjord_team_merge'),type:'merge',name:'Saml teamresultater',x:750,y:150};
+ const edge=(source,target)=>({source,target,port:'out'});
+ const edges=[edge(start.id,distributor.id),...agents.map(n=>edge(distributor.id,n.id)),...agents.map(n=>edge(n.id,merge.id)),edge(merge.id,reviewer?.id||end.id),...(reviewer?[edge(reviewer.id,end.id)]:[])];
+ // This graph exists only for execution. The user's saved manual wires stay unchanged.
+ return{nodes:[start,distributor,...agents,merge,...(reviewer?[reviewer]:[]),end],edges,executionMode:'manual',dynamicTeam:true};
+}
 async function runGraph({workflow,startNodeId,routeOnly=false,...options}){
+ if(workflow.graph?.executionMode==='dynamic'){
+  const saved=validateGraph(workflow.graph),virtual=buildDynamicGraph(saved,startNodeId);
+  const results=await runGraph({workflow:{...workflow,graph:virtual},startNodeId,routeOnly,...options});
+  if(routeOnly)return results;
+  const agents=new Set(saved.nodes.filter(n=>n.type==='agent').map(n=>n.id));
+  const contributions=results.filter(r=>agents.has(r.nodeId));
+  const review=results.find(r=>saved.nodes.some(n=>n.type==='review'&&n.id===r.nodeId));
+  const text=contributions.map(r=>r.name+':\n'+r.text).join('\n\n').slice(-30000)+(review?'\n\nCode Review:\n'+review.text:'');
+  return[...results,{nodeId:virtual.nodes.at(-1).id,name:'Fælles resultat',text:text||'Ingen agentresultater blev afleveret.'}];
+ }
+
  const controller=new AbortController();options.signal=AbortSignal.any([controller.signal,...(options.signal?[options.signal]:[])]);
  require('node:events').setMaxListeners(0,options.signal);
  const graph=validateGraph(workflow.graph),byId=new Map(graph.nodes.map(n=>[n.id,n]));const start=startNodeId?byId.get(startNodeId):graph.nodes.find(n=>n.type==='start');if(!start||start.type!=='start')throw new Error('Projektets startnode findes ikke i dette workflow');
  const {runWorkflow}=require('./codex.cjs');const enabled=new Set([start.id]),parents=new Map(),outputs=new Map(),classifications=new Map(),answers=[];
- const team=createTeam({nodes:graph.nodes,prompt:options.prompt,emit:options.emit,signal:options.signal,route:async request=>{
+ const team=createTeam({nodes:graph.nodes,prompt:options.prompt,emit:options.emit,signal:options.signal,compact:workflow.graph?.dynamicTeam===true,maxActiveAgents:graph.nodes.find(n=>n.type==='router')?.maxAgents||16,route:async request=>{
   const source=byId.get(request.source),before=activeAncestors(source.id),analyst=[...graph.nodes].reverse().find(n=>n.type==='analysis'&&before.has(n.id));
   const decider=source.type==='analysis'?source:source.type==='router'&&source.routingMode!=='analysis'?source:analyst||byId.get(request.members[0]);
   const candidates=request.members.filter(id=>id!==request.from).map(id=>byId.get(id));
-  const result=await runWorkflow({...options,signal:AbortSignal.any([AbortSignal.timeout(60000),...(options.signal?[options.signal]:[])]),config:undefined,projectBridge:false,onImage:undefined,emit:()=>{},structuredOutput:true,history:'',steps:[{...decider,name:source.name+' · teamfordeling',taskMode:'analysis',access:'read',instructions:'Fordel kun den nye delopgave til den bedst egnede aktive holdkammerat ud fra roller, teamets opgaver og udgangenes kriterier. Udfør aldrig opgaven. Returnér JSON med target og reason.'}],prompt:JSON.stringify({...request,routes:source.routes||[],candidates:candidates.map(n=>({id:n.id,name:n.name,role:n.instructions}))}),outputSchema:{type:'object',properties:{target:{type:'string',enum:candidates.map(n=>n.id)},reason:{type:'string'}},required:['target','reason'],additionalProperties:false}});
+  const result=await runWorkflow({...options,signal:AbortSignal.any([AbortSignal.timeout(60000),...(options.signal?[options.signal]:[])]),config:undefined,projectBridge:false,onImage:undefined,emit:()=>{},structuredOutput:true,history:'',steps:[{...decider,name:source.name+' · teamfordeling',taskMode:'analysis',access:'read',instructions:'Fordel kun den nye delopgave til den bedst egnede aktive holdkammerat ud fra roller, teamets opgaver og udgangenes kriterier. Udfør aldrig opgaven. Returnér JSON med target og reason.'}],prompt:JSON.stringify({...request,routes:source.routes||[],candidates:candidates.map(n=>({id:n.id,name:n.name,role:workflow.graph?.dynamicTeam?n.instructions.slice(0,1200):n.instructions}))}),outputSchema:{type:'object',properties:{target:{type:'string',enum:candidates.map(n=>n.id)},reason:{type:'string'}},required:['target','reason'],additionalProperties:false}});
   return JSON.parse(result[0].text);
  }});
  const selectedTargets=new Set();
@@ -61,7 +98,7 @@ async function runGraph({workflow,startNodeId,routeOnly=false,...options}){
  const executeAgentTurn=async(node,feedback)=>{
   options.signal.throwIfAborted();
   const channel=await team.connect(node.id),teamTasks=team.takeTasks(node.id);let result;
-  try{result=await runWorkflow({...options,...(channel?{config:{...options.config,mcp_servers:{...options.config?.mcp_servers,...channel.config}}}:{}),emit:e=>options.emit({...e,nodeId:node.id}),history:((options.history||'')+'\n'+upstream(node.id)+(outputs.has(node.id)?'\nTidligere svar fra dig:\n'+outputs.get(node.id):'')+(channel?'\nFælles teamkontekst:\n'+channel.context:'')).slice(-60000),prompt:options.prompt+(teamTasks.length?'\nOpgaver fra dine holdkammerater, som du skal udføre nu med din eksisterende rolle og filadgang:\n'+JSON.stringify(teamTasks):'')+(feedback?'\n\nRettelsesopgave fra Code Reviewer (bevar din eksisterende rolle og filadgang):\n'+JSON.stringify({...feedback,previousResult:outputs.get(node.id)||''}):''),steps:[channel?{...node,instructions:node.instructions+'\nDu er del af et team om SAMME forespørgsel. team_context viser roller, opgaver og færdige resultater. Udfør kun din egen rolle. Hvis din løsning kræver arbejde fra en anden agent, skal du med team_request sende en konkret opgave tilbage til den fordeler, teamet kom fra. Beskriv hvad der skal bygges, funktion, relevante API/datafelter, placering og acceptkriterier. Du må ikke vælge eller instruere modtageren direkte; fordeleren vælger den rette aktive agent. Et pending-svar betyder kun at opgaven er sat i kø, ikke at den er udført. Den udføres før samling/review, også hvis modtageren allerede var færdig. Gentag ikke en allerede registreret opgave. Brug team_context til at se status; vent ikke i en løkke på andre agenter. Hold dig til din egen filadgang og rolle.'}:node]});}
+  try{result=await runWorkflow({...options,...(channel?{config:{...options.config,mcp_servers:{...options.config?.mcp_servers,...channel.config}}}:{}),emit:e=>options.emit({...e,nodeId:node.id}),history:((options.history||'')+'\n'+upstream(node.id)+(outputs.has(node.id)?'\nTidligere svar fra dig:\n'+outputs.get(node.id):'')+(channel?'\nFælles teamkontekst:\n'+channel.context:'')).slice(workflow.graph?.dynamicTeam?-24000:-60000),prompt:options.prompt+(teamTasks.length?'\nOpgaver fra dine holdkammerater, som du skal udføre nu med din eksisterende rolle og filadgang:\n'+JSON.stringify(teamTasks):'')+(feedback?'\n\nRettelsesopgave fra Code Reviewer (bevar din eksisterende rolle og filadgang):\n'+JSON.stringify({...feedback,previousResult:outputs.get(node.id)||''}):''),steps:[channel?{...node,instructions:node.instructions+'\nDu er del af et team om SAMME forespørgsel. team_context viser roller, opgaver og færdige resultater. Udfør kun din egen rolle. Hvis din løsning kræver arbejde fra en anden agent, skal du med team_request sende en konkret opgave tilbage til den fordeler, teamet kom fra. Beskriv hvad der skal bygges, funktion, relevante API/datafelter, placering og acceptkriterier. Du må ikke vælge eller instruere modtageren direkte; fordeleren vælger den rette aktive agent. Et pending-svar betyder kun at opgaven er sat i kø, ikke at den er udført. Den udføres før samling/review, også hvis modtageren allerede var færdig. Gentag ikke en allerede registreret opgave. Brug team_context til at se status; vent ikke i en løkke på andre agenter. Hold dig til din egen filadgang og rolle.'}:node]});}
   catch(e){team.finishTasks(teamTasks,true);throw e;}finally{channel?.close();}
   if(typeof result[0]?.text!=='string'||!result[0].text.trim())throw new Error('Agenten '+node.name+' blev færdig uden et svar. Intet er sendt videre.');outputs.set(node.id,result[0].text);answerFor(node,result[0]);
   team.result(node.id,result[0].text);team.finishTasks(teamTasks);
@@ -113,8 +150,8 @@ async function runGraph({workflow,startNodeId,routeOnly=false,...options}){
     if(!Array.isArray(choice.routes)||!choice.routes.length||(node.routeMode==='one'&&choice.routes.length!==1)||new Set(choice.routes).size!==choice.routes.length||choice.routes.some(port=>!node.routes.some(r=>r.id===port)))throw new Error('Fordeleren valgte en ugyldig udgang');
     outgoing=outgoing.filter(e=>choice.routes.includes(e.port));outputs.set(id,String(choice.reason||''));options.emit({type:'branch',nodeId:id,name:node.name,ports:choice.routes,targets:outgoing.map(e=>e.target),text:choice.reason});
    }else{
-   const result=await runWorkflow({...options,emit,config:undefined,projectBridge:false,history:input,structuredOutput:true,steps:[{...node,instructions:node.instructions+'\nVælg 1 eller flere tilladte modtager-id’er fra listen. Brug ingen værktøjer. Returner kun JSON med targets og reason. Vælg kun noder med direkte forbindelse.'}],prompt:JSON.stringify({task:options.prompt,targets:outgoing.map(e=>({id:e.target,name:byId.get(e.target).name,instructions:byId.get(e.target).instructions||''}))}),outputSchema:{type:'object',properties:{targets:{type:'array',items:{type:'string'},minItems:1,maxItems:32},reason:{type:'string'}},required:['targets','reason'],additionalProperties:false}});
-   const choice=JSON.parse(result[0].text);if(!Array.isArray(choice.targets)||!choice.targets.length||choice.targets.some(t=>!outgoing.some(e=>e.target===t)))throw new Error('Fordeleren valgte en node uden tilladt forbindelse');outgoing=outgoing.filter(e=>choice.targets.includes(e.target));outputs.set(id,String(choice.reason||''));options.emit({type:'branch',nodeId:id,name:node.name,targets:outgoing.map(e=>e.target),text:choice.reason});
+   const result=await runWorkflow({...options,emit,config:undefined,projectBridge:false,history:input,structuredOutput:true,steps:[{...node,instructions:node.instructions+'\nVælg 1 eller flere tilladte modtager-id’er fra listen. Brug ingen værktøjer. Returner kun JSON med targets og reason. Vælg kun noder med direkte forbindelse.'}],prompt:JSON.stringify({task:options.prompt,targets:outgoing.map(e=>({id:e.target,name:byId.get(e.target).name,instructions:workflow.graph?.dynamicTeam?(byId.get(e.target).instructions||'').slice(0,1100):byId.get(e.target).instructions||''}))}),outputSchema:{type:'object',properties:{targets:{type:'array',items:{type:'string'},minItems:1,maxItems:node.maxAgents||32},reason:{type:'string'}},required:['targets','reason'],additionalProperties:false}});
+   const choice=JSON.parse(result[0].text);if(!Array.isArray(choice.targets)||!choice.targets.length||(node.maxAgents&&choice.targets.length>node.maxAgents)||choice.targets.some(t=>!outgoing.some(e=>e.target===t)))throw new Error('Fordeleren valgte en node uden tilladt forbindelse');outgoing=outgoing.filter(e=>choice.targets.includes(e.target));outputs.set(id,String(choice.reason||''));options.emit({type:'branch',nodeId:id,name:node.name,targets:outgoing.map(e=>e.target),text:choice.reason});
    }
   }else if(node.type==='condition'){const pass=evaluateCondition(node,options.prompt,rawInput);outgoing=outgoing.filter(e=>e.port===(pass?'yes':'no'));options.emit({type:'branch',nodeId:id,name:node.name,targets:outgoing.map(e=>e.target),text:pass?'Betingelsen er opfyldt → ja':'Betingelsen er ikke opfyldt → nej'});}
   else if(node.type==='text')outputs.set(id,node.template.replace(/\{\{prompt\}\}/g,()=>options.prompt).replace(/\{\{input\}\}/g,()=>rawInput));
@@ -146,6 +183,15 @@ async function runGraph({workflow,startNodeId,routeOnly=false,...options}){
      for(const id of descendants){settled.delete(id);generations.set(id,(generations.get(id)||0)+1);}
     }
    }
+   // In a dynamic team a specialist can call an initially idle teammate.
+   // Register the newly activated worker as a real dependency before merges/review.
+   if(workflow.graph?.dynamicTeam)for(const id of team.pendingTargets())if(!enabled.has(id)){
+    enabled.add(id);settled.delete(id);
+    const distributor=graph.nodes.find(n=>n.type==='router');
+    if(distributor){if(!parents.has(id))parents.set(id,new Set());parents.get(id).add(distributor.id);}
+    const descendants=new Set();function invalidate(key){for(const edge of graph.edges.filter(e=>e.source===key))if(!descendants.has(edge.target)){descendants.add(edge.target);invalidate(edge.target);}}invalidate(id);
+    for(const downstream of descendants){settled.delete(downstream);generations.set(downstream,(generations.get(downstream)||0)+1);}
+   }
    // Extra assignments received while an agent was working run again with its
    // existing role. Never run two turns for the same agent simultaneously.
    for(const id of team.pendingTargets())if(settled.has(id)&&!running.has(id))launch(id,async()=>{
@@ -159,7 +205,7 @@ async function runGraph({workflow,startNodeId,routeOnly=false,...options}){
     const before=activeAncestors(id);
     // Wait for queued revisions to the inputs being collected. Team membership
     // alone must never introduce a dependency on an unconnected branch.
-    if(['merge','review','end'].includes(byId.get(id).type)&&(options.runInput?.routing||[...before].some(p=>running.has(p)||team.pendingTargets().includes(p)||options.runInput?.pendingTargets().includes(p))))continue;
+    if(['merge','review','end'].includes(byId.get(id).type)&&(options.runInput?.routing||[...before].some(p=>running.has(p)||team.pendingTargets().includes(p)||options.runInput?.pendingTargets().includes(p))||workflow.graph?.dynamicTeam&&team.hasOutstandingTasks()))continue;
     const generation=generations.get(id)||0;launch(id,async()=>{await executeNode(id);if(generation===(generations.get(id)||0))settled.add(id);});
    }
    if(running.size||options.runInput?.routing){const change=options.runInput?.watch();try{await Promise.race([...running.values(),...(change?[change.promise]:[])]);}finally{change?.close();}}
@@ -169,4 +215,4 @@ async function runGraph({workflow,startNodeId,routeOnly=false,...options}){
   team.assertSettled();return routeOnly?[...selectedTargets]:answers.sort((a,b)=>order.indexOf(a.nodeId)-order.indexOf(b.nodeId));
  }finally{controller.abort();await Promise.allSettled(running.values());team.close();}
 }
-module.exports={legacyGraph,validateGraph,topological,evaluateCondition,runGraph};
+module.exports={legacyGraph,validateGraph,topological,evaluateCondition,buildDynamicGraph,runGraph};

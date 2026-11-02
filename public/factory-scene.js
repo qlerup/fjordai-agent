@@ -184,7 +184,7 @@ export class FactoryScene{
  set(project){
   this.project=project;if(!this.renderer)return;
   this.root.traverse(o=>{o.geometry?.dispose();for(const mat of(Array.isArray(o.material)?o.material:[o.material]))if(mat&&![...this.materials.values()].includes(mat)){if(mat.map&&![...this.textures.values()].includes(mat.map))mat.map.dispose();mat.dispose();}});this.root.clear();this.labels.replaceChildren();this.machines=[];this.belts=[];this.drones=new Map();
-  const graph=project.graph;
+  const graph=project.graph.executionMode==='dynamic'?{...project.graph,edges:[]}:project.graph;
   // Preserve the editor's layout; the third dimension belongs to the machines.
   const positions=new Map(graph.nodes.map(n=>[n.id,new T.Vector3(n.x/42,0,n.y/42)]));
   for(const n of graph.nodes){const p=positions.get(n.id),g=new T.Group();g.position.copy(p);g.userData.nodeId=n.id;this.root.add(g);const model=n.model||'Serverens standard',hash=[...model].reduce((v,c)=>(v*31+c.charCodeAt(0))>>>0,0),accent=new T.Color().setHSL((hash%360)/360,.55,.57).getHex();

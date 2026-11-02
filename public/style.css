@@ -99,3 +99,10 @@ main:has(#tab-workflows:not([hidden])){max-width:2100px;align-self:start;margin-
 .work-details summary{cursor:pointer;font-weight:600}
 .work-details>div{max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
 .work-details p{border-top:1px solid var(--line,#36424b);padding-top:10px;line-height:1.6}
+
+/* Optional connectionless agent-team workflow settings. */
+.workflow-mode-settings{display:flex;align-items:center;flex-wrap:wrap;gap:14px;padding:12px 18px;border-bottom:1px solid var(--border,#334155)}
+.workflow-mode-settings label{display:flex;align-items:center;gap:8px;font-size:.88rem}
+.workflow-mode-settings select,.workflow-mode-settings input{width:auto;max-width:230px}
+.workflow-mode-settings input[type=number]{width:76px}
+.workflow-mode-settings p{flex-basis:100%;margin:0}
