@@ -2,7 +2,7 @@ const http=require('node:http'),path=require('node:path'),{randomBytes}=require(
 const validText=(v,max)=>typeof v==='string'&&v.trim()&&v.length<=max;
 
 // One in-memory channel per graph run. No messages or credentials cross runs.
-function createTeam({nodes,prompt,emit,signal,route}){
+function createTeam({nodes,prompt,emit,signal,route,compact=false}){
  const byId=new Map(nodes.map(n=>[n.id,n])),groups=[],caps=new Map(),tasks=[];let server,starting,closed=false;
  function register(source,edges){
   const members=[...new Set(edges.map(e=>e.target))].filter(id=>byId.get(id)?.type==='agent');
@@ -12,7 +12,7 @@ function createTeam({nodes,prompt,emit,signal,route}){
   emit({type:'team',kind:'assignment',teamId:id,from:'Fælles opgave',text:members.map(id=>byId.get(id).name).join(', ')+' arbejder sammen om samme forespørgsel.'});
  }
  const teamsFor=id=>groups.filter(g=>g.members.includes(id));
- function context(id){return teamsFor(id).map(g=>({teamId:g.id,task:prompt,members:g.members.map(key=>({id:key,name:byId.get(key).name,role:byId.get(key).instructions})),messages:g.messages.slice(-24),tasks:tasks.filter(t=>t.teamId===g.id),results:[...g.results].map(([nodeId,text])=>({nodeId,name:byId.get(nodeId).name,text}))}));}
+ function context(id){return teamsFor(id).map(g=>({teamId:g.id,task:prompt,members:g.members.map(key=>({id:key,name:byId.get(key).name,role:(byId.get(key).instructions||'').slice(0,compact?1000:12000)})),messages:g.messages.slice(compact?-8:-24),tasks:tasks.filter(t=>t.teamId===g.id),results:[...g.results].map(([nodeId,text])=>({nodeId,name:byId.get(nodeId).name,text:compact?text.slice(-1600):text}))}));}
  function post(g,kind,from,text,to){
   if(g.messages.length>=64)g.messages.shift();
   const message={kind,from,text,...(to?{to}: {}),...(['task-request','task'].includes(kind)?{transport:'drone'}:{})};g.messages.push(message);
@@ -63,7 +63,7 @@ function createTeam({nodes,prompt,emit,signal,route}){
  async function connect(id){
   if(!teamsFor(id).length)return null;
   await start();signal?.throwIfAborted();const token=randomBytes(32).toString('hex');caps.set(token,id);
-  return{context:JSON.stringify(context(id)).slice(-36000),config:{fjordagent_team:{command:process.execPath,args:[path.join(__dirname,'team-bridge.cjs')],env:{FJORDAGENT_TEAM_URL:'http://127.0.0.1:'+server.address().port+'/team',FJORDAGENT_TEAM_TOKEN:token},default_tools_approval_mode:'approve',tool_timeout_sec:180}},close:()=>caps.delete(token)};
+  return{context:JSON.stringify(context(id)).slice(compact?-14000:-36000),config:{fjordagent_team:{command:process.execPath,args:[path.join(__dirname,'team-bridge.cjs')],env:{FJORDAGENT_TEAM_URL:'http://127.0.0.1:'+server.address().port+'/team',FJORDAGENT_TEAM_TOKEN:token},default_tools_approval_mode:'approve',tool_timeout_sec:180}},close:()=>caps.delete(token)};
  }
  function result(id,text){for(const g of teamsFor(id)){g.results.set(id,text.slice(-6000));post(g,'result',id,text.slice(-4000));}}
  const takeTasks=id=>tasks.filter(t=>t.to===id&&t.status==='pending').map(t=>{t.status='running';return{...t};});
