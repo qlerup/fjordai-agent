@@ -123,6 +123,16 @@ To rebuild the locally served 3D bundle: `npm ci --ignore-scripts`, then
 `npm run build:factory`. Docker builds it and packages the VSIX automatically;
 Three.js and esbuild are pinned build dependencies and no CDN is used at runtime.
 
+## Connectionless dynamic agent teams (optional)
+
+Each project now has a **Manuelt / Dynamisk team** execution selector in the workflow editor. Existing projects continue to use manual wiring by default. In dynamic mode, place a Start node and any number of specialist **Agent** nodes on the canvas without connecting them; include an optional **Fordeler** (Orchestrator) and **Code Reviewer**. The engine builds a temporary routing/collection graph for each run while keeping the saved manual edges unchanged. Switch back to Manuelt to reuse the original graph.
+
+- The Orchestrator selects only the relevant specialists and is capped by **Højst aktive specialister** (1–16, default 4). It uses the optional Fordeler node's instructions/model; without one, a read-only low-reasoning distributor is created for that run.
+- Selected specialists retain their saved models, role instructions and file permissions. They can coordinate through the existing per-run team tools, request follow-up work and undergo reviewer correction. The final response collects the selected agents' outputs without an additional summarization model call.
+- Dynamic mode currently supports Start, Fordeler, Agent, Code Reviewer and Svar nodes, with at most one Fordeler and Code Reviewer. Other logic nodes and fully custom edge/conditional flows remain supported in manual mode. Manual edges are ignored, not erased, in dynamic mode.
+- Dynamic runs shorten injected specialist descriptions and prior conversation context to reduce repetitive token use. This is a **cost optimization**, not a guaranteed token saving or quality improvement: compare similar runs using actual usage events and tests before drawing conclusions.
+- Like manual concurrent branches, selected write agents currently share a working directory. Give them non-overlapping file responsibilities; avoid enabling automatic full access for untrusted tasks. No unattended deployment is added by this feature.
+
 ## Agent collaboration
 
 The team conversation contains messages and tasks sent between agents. Automatic status reports and partial results stay outside this conversation. Agents can send coordination messages using `team_message`; implementation requests use `team_request` and the distributor selects the recipient. Extra user messages traverse input analysis and routing and appear as packages in the factory.
