@@ -50,7 +50,7 @@ const flowEditor=new FjordFlow.FlowEditor({canvas:$('flow-canvas'),inspector:$('
 const factoryView=$('factory-view');
 let teamThreadKey='';
 function renderTeamThread(run){
- const events=(run?.events||[]).filter(e=>e.type==='team'&&['message','task-request','task'].includes(e.kind)),key=(run?.id||'empty')+':'+events.length;
+ const events=(run?.events||[]).filter(e=>e.type==='team'&&['message','task-request','task','task-completed','error'].includes(e.kind)),key=(run?.id||'empty')+':'+events.length;
  if(key===teamThreadKey)return;teamThreadKey=key;
  const list=$('team-thread-messages'),nearEnd=list.scrollHeight-list.scrollTop-list.clientHeight<70;
  $('team-thread-count').textContent=String(events.length);
@@ -74,7 +74,7 @@ $('team-thread-close').onclick=()=>toggleTeamThread(false);
 $('team-thread').addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();toggleTeamThread(false);}});
 const factoryScene=new FjordFactory.FactoryScene($('factory-stage'),{onSelect:showMachine});
 window.fjordFactory=factoryScene;
-function showMachine(n,live){const box=$('factory-details');box.replaceChildren(el('p','VALGT MASKINE','eyebrow'),el('h3',n.name),el('p',FjordFlow.labels[n.type]||n.type,'muted'));if(n.type==='review'||n.type==='analysis'||n.type==='agent'||(n.type==='router'&&n.routingMode!=='analysis')){box.append(el('p','Model: '+(live.models?.[n.id]||n.model||'Serverens standard')),el('p','Reasoning: '+(n.reasoningEffort||'Modellens standard')),el('p',n.access==='write'?'Kan redigere projektfiler':'Læseadgang'));}if(n.instructions)box.append(el('h4','Opgave'),el('p',n.instructions));if(n.type==='analysis'||n.type==='router')for(const route of n.routes||[])box.append(el('strong',route.name),el('p',route.rule||'Ingen kriterier angivet','muted'));const answer=live.answers?.findLast(a=>a.nodeId===n.id);if(answer){box.append(el('h4','Færdigt svar'),el('pre',answer.text,'factory-answer'));}else box.append(el('p',live.nodes[n.id]==='running'?'Maskinen arbejder. Intet færdigt svar endnu.':'Der er endnu ikke et færdigt svar fra denne maskine.','muted'));const edit=el('button','Rediger denne maskine');edit.type='button';edit.onclick=()=>{openWorkflowEditor();flowEditor.selected=n.id;flowEditor.render();};box.append(edit);}
+function showMachine(n,live){const box=$('factory-details');box.replaceChildren(el('p','VALGT MASKINE','eyebrow'),el('h3',n.name),el('p',FjordFlow.labels[n.type]||n.type,'muted'));if(n.type==='review'||n.type==='analysis'||n.type==='agent'||(n.type==='router'&&n.routingMode!=='analysis')){box.append(el('p','Model: '+(live.models?.[n.id]||n.model||'Serverens standard')),el('p','Reasoning: '+(n.reasoningEffort||'Modellens standard')),el('p',n.access==='write'?'Kan redigere projektfiler':'Læseadgang'));}if(n.instructions)box.append(el('h4','Opgave'),el('p',n.instructions));if(n.type==='analysis'||n.type==='router')for(const route of n.routes||[])box.append(el('strong',route.name),el('p',route.rule||'Ingen kriterier angivet','muted'));const answer=live.answers?.findLast(a=>a.nodeId===n.id);if(answer){box.append(el('h4','Færdigt svar'),el('pre',answer.text,'factory-answer'));}else box.append(el('p',live.nodes[n.id]==='running'?'Maskinen arbejder. Intet færdigt svar endnu.':'Der er endnu ikke et færdigt svar fra denne maskine.','muted'));if(editing?.graph.nodes.some(saved=>saved.id===n.id)){const edit=el('button','Rediger denne agent');edit.type='button';edit.onclick=()=>{openWorkflowEditor();flowEditor.selected=n.id;flowEditor.render();};box.append(edit);}else box.append(el('p','Denne koordinationsstation oprettes automatisk under dynamiske kørsler.','muted'));}
 async function showFactory(){if(document.fullscreenElement===editor)await document.exitFullscreen();editor.classList.remove('expanded');factoryView.hidden=false;editor.hidden=true;$('factory-draft').hidden=$('flow-status').textContent!=='Ikke gemt';syncFullscreen();factoryScene.size();}
 function openWorkflowEditor(){factoryView.hidden=true;$('workflow-form').hidden=false;if(document.fullscreenElement===factoryView)document.exitFullscreen();factoryView.classList.remove('expanded');flowEditor.wires();syncFullscreen();}
 const labelToggle=$('factory-label-toggle');function syncLabels(){labelToggle.textContent=factoryScene.labelsVisible?'Skjul skilte':'Vis skilte';labelToggle.setAttribute('aria-pressed',String(!!factoryScene.labelsVisible));}labelToggle.onclick=()=>{factoryScene.setLabelsVisible(!factoryScene.labelsVisible);syncLabels();};syncLabels();
@@ -85,7 +85,7 @@ $('workflow-execution-mode').onchange=()=>{if(!editing)return;flowEditor.graph.e
 $('workflow-max-agents').onchange=()=>{if(!editing)return;flowEditor.graph.maxActiveAgents=Number($('workflow-max-agents').value);flowEditor.changed();};
 function accessHint(){const full=$('workflow-full-access').checked;$('workflow-access-help').textContent=full?'Fuld adgang uden sandbox i serverens arbejdsmiljø. Færdige ændringer anvendes og gemmes automatisk i VS Code efter eventuelle reviews. Lokale filkonflikter stopper overførslen. Gælder nye opgaver.':'Normal tilstand: værktøjsgodkendelser efter behov og manuel overførsel af færdige kodeændringer.';}
 $('workflow-full-access').onchange=()=>{if(editing){editing.fullAccess=$('workflow-full-access').checked;$('flow-status').textContent='Ikke gemt';accessHint();}};
-function editWorkflow(w){renderTeamThread(null);editing=structuredClone(w);$('workflow-full-access').checked=w.fullAccess===true;accessHint();$('project').value=w.id;preview();$('workflow-name').value=w.name;flowEditor.set(editing);$('workflow-execution-mode').value=editing.graph.executionMode||'manual';$('workflow-max-agents').value=editing.graph.maxActiveAgents||4;workflowModeHint();factoryScene.set(w);$('factory-title').textContent=w.name+(w.fullAccess===true?' · Full access':'');$('flow-status').textContent='Gemt';showFactory();workflowList();entryLabel();loadModels();refreshMission();}
+function editWorkflow(w){renderTeamThread(null);editing=structuredClone(w);$('workflow-full-access').checked=w.fullAccess===true;accessHint();$('project').value=w.id;preview();$('workflow-name').value=w.name;flowEditor.set(editing);const network=editing.graph.executionMode==='dynamic';factoryView.dataset.visualMode=network?'network':'factory';$('factory-view-label').textContent=network?'LIVE AGENTNETVÆRK':'LIVE AGENTFABRIK';$('factory-fit').textContent=network?'Vis hele netværket':'Vis hele fabrikken';$('factory-rule').textContent=network?'Farvede signaler viser faktiske overdragelser · svage linjer viser tilgængelige specialister':'Svar først. Afsendelse bagefter.';$('factory-help').textContent=network?'Træk for at dreje · Rul for at zoome · Klik en agent for status og model · Åbn Teamsamtale for detaljer':'Træk for at dreje · Rul for at zoome · Højreklik og træk for at flytte · Vælg en maskine for at se dens opgave og svar';$('workflow-execution-mode').value=editing.graph.executionMode||'manual';$('workflow-max-agents').value=editing.graph.maxActiveAgents||4;workflowModeHint();factoryScene.set(w);$('factory-title').textContent=w.name+(w.fullAccess===true?' · Full access':'');$('flow-status').textContent='Gemt';showFactory();workflowList();entryLabel();loadModels();refreshMission();}
 for(const [type,label]of Object.entries(FjordFlow.labels)){const b=el('button',FjordFlow.icons[type]+'  '+label,'palette-node type-'+type);b.type='button';b.draggable=true;b.dataset.nodeType=type;b.ondragstart=e=>e.dataTransfer.setData('fjord-node',type);b.onclick=()=>{if(!editing)return notice('Opret først et projekt');flowEditor.add(type);};$('node-palette').append(b);}
 $('flow-arrange').onclick=()=>flowEditor.arrange();$('flow-zoom').onchange=()=>flowEditor.setZoom(Number($('flow-zoom').value));
 $('workflow-name').oninput=()=>{if(editing){editing.name=$('workflow-name').value;$('flow-status').textContent='Ikke gemt';}};
@@ -126,6 +126,25 @@ async function refreshMission(){
  }catch(e){if(generation!==missionGeneration)return;$('mission-state').textContent='FORBINDELSE AFBRUDT';$('mission-detail').textContent='Live-status kunne ikke hentes: '+e.message;flowEditor.setLive({nodes:{},edges:new Set(),active:null});factoryScene.setLive({nodes:{},edges:new Set(),active:null});editor.dataset.runState='offline';}
  finally{if(generation===missionGeneration)missionTimer=setTimeout(refreshMission,1500);}
 }
+function updateNetworkFeed(run){
+ const feed=$('network-live-feed');
+ if(editing?.graph.executionMode!=='dynamic'){feed.hidden=true;return;}
+ feed.hidden=false;
+ const events=(run?.events||[]).filter(e=>e.type==='team'&&['message','task-request','task','task-completed','error'].includes(e.kind)||e.type==='review-escalated'||e.type==='node-started').slice(-6).reverse();
+ const names=new Map(editing.graph.nodes.map(n=>[n.id,n.name]));names.set('__fjord_team_router','Orchestrator');names.set('__fjord_team_merge','Samling');
+ feed.replaceChildren(el('strong','LIVE · AGENTAKTIVITET'));
+ for(const event of events){
+  const nodeId=event.nodeId||event.from;
+  const label=event.type==='node-started'?'Arbejder':event.type==='review-escalated'?'Ekstra Code Review':({message:'Besked','task-request':'Ny opgave',task:'Opgave fordelt','task-completed':'Opgave fuldført',error:'Fejl'}[event.kind]||'Aktivitet');
+  const source=event.fromName||names.get(event.from)||event.name||'Team';
+  const target=event.toName||names.get(event.to);
+  const desc=event.type==='node-started'?(event.name||'Agent')+' arbejder':event.type==='review-escalated'?(event.name||'Reviewer')+' bruger '+(event.model||'eskaleringsmodellen'):source+(target?' → '+target:'')+(event.type==='team'&&event.text?' · '+event.text.slice(0,85):'');
+  const item=el('button',undefined,'network-feed-event');item.type='button';item.append(el('small',label),el('span',desc));
+  if(editing.graph.nodes.some(n=>n.id===nodeId)){item.onclick=()=>factoryScene.select(nodeId);item.title='Vis '+(names.get(nodeId)||source);}else item.disabled=true;
+  feed.append(item);
+ }
+ if(!events.length)feed.append(el('span','Afventer opgaver fra Chat eller VS Code.','muted'));
+}
 function drawMission(run){
  renderTeamThread(run);
  const nodes={},edges=new Set(),ports=new Set(),trail=[],models={},answers=[];let active=null,detail='Fabrikken venter på en opgave fra Chat eller VS Code.';
@@ -144,7 +163,7 @@ function drawMission(run){
  $('mission-state').textContent=labels[run?.status]||'KLAR TIL OPGAVE';editor.dataset.runState=run?.status||'idle';
  $('mission-detail').textContent=run?.status==='completed'?'Resultatet er klar i Chat eller VS Code.':run?.error||detail;
  const completed=Object.values(nodes).filter(s=>s==='completed').length;
- $('mission-score').textContent=completed+' gennemført · '+(active?'1 aktiv':'ingen aktive');
+ $('mission-score').textContent=completed+' gennemført · '+Object.values(nodes).filter(state=>state==='running').length+' aktive';
  $('mission-trail').replaceChildren(...trail.slice(-12).map((item,i)=>{const chip=el('span',(i?'→  ':'')+item.name,'route-chip');chip.dataset.state=nodes[item.id];return chip;}));
  if(!trail.length)$('mission-trail').append(el('span','RUTEN VISER SIG HER, NÅR OPGAVEN STARTER','route-empty'));
  flowEditor.setLive({nodes,edges,ports,active});factoryScene.setLive({runId:run?.id,events:run?.events||[],status:run?.status||'idle',nodes,edges,ports,active,models,answers:answers.length?answers:run?.answers||[]});factoryView.dataset.runState=run?.status||'idle';

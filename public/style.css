@@ -106,3 +106,19 @@ main:has(#tab-workflows:not([hidden])){max-width:2100px;align-self:start;margin-
 .workflow-mode-settings select,.workflow-mode-settings input{width:auto;max-width:230px}
 .workflow-mode-settings input[type=number]{width:76px}
 .workflow-mode-settings p{flex-basis:100%;margin:0}
+
+/* Dynamic projects use a holographic agent map; manual projects retain the warehouse. */
+.factory-view[data-visual-mode="network"] .factory-toolbar{background:linear-gradient(115deg,#102e49,#10232d 60%,#17223e)}
+.factory-view[data-visual-mode="network"] .factory-machine-label{background:#0b2135ec;border-color:#387c95;border-radius:12px;box-shadow:0 8px 24px #0008,0 0 18px #167fb019}
+.factory-view[data-visual-mode="network"] .factory-machine-label[data-state="running"]{border-color:#ffcf80;box-shadow:0 0 24px #ffc87955}
+.factory-view[data-visual-mode="network"] .factory-machine-label[data-state="completed"]{border-color:#4dcda4}
+.network-live-feed{position:absolute;left:12px;bottom:12px;z-index:8;display:flex;flex-direction:column;gap:5px;width:min(350px,calc(100% - 24px));max-height:44%;overflow:auto;padding:11px 12px;background:#0b2034d9;border:1px solid #32728e;border-radius:13px;box-shadow:0 15px 35px #020b17a8;backdrop-filter:blur(8px);pointer-events:auto}
+.network-live-feed[hidden]{display:none!important}
+.network-live-feed>strong{font-size:10px;letter-spacing:1.5px;color:#80d9f5;padding:2px 4px 5px}
+.network-live-feed .network-feed-event{display:flex;flex-direction:column;align-items:flex-start;gap:3px;width:100%;border:1px solid transparent;border-radius:7px;padding:6px 8px;text-align:left;background:#153248c9;color:#e2f6ff;font-size:11px;line-height:1.4}
+.network-feed-event small{font-size:9px;color:#77d7f2;text-transform:uppercase;letter-spacing:.9px}
+.network-feed-event span{max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.network-feed-event:not(:disabled):hover,.network-feed-event:not(:disabled):focus-visible{border-color:#68c7e8;background:#1c4259}
+.network-feed-event:disabled{cursor:default;opacity:.85}
+@media(max-width:700px){.network-live-feed{max-height:38%;width:min(285px,calc(100% - 24px));padding:8px}.network-live-feed .network-feed-event{padding:4px 6px;font-size:10px}}
+@media(prefers-reduced-motion:reduce){.factory-view[data-visual-mode="network"] .network-live-feed{backdrop-filter:none}}
